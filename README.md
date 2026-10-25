@@ -1500,6 +1500,8 @@ External software and all its rights belong to the respective developers.
 #### Thanks to: 
 Mark: this would be useless without your protocol! :)
 
+Mirko for remotely testing the Guest Mode on Safari (Mac) Firefox (Debian) DuckDuckGo (Android) 
+
 neoemit for the first refactor & docker addition (in the old rBrowser v1, also ported in v2)
 
 SudoIvan for his --host / --port arguments contribution (in the old rBrowser v1, also ported in v2)
