@@ -7,3 +7,19 @@ cache/
 downloads/
 nomadnet_browser_identity
 *.pid
+
+# Tools fetched at run time (cloudflared for the remote tunnel)
+bin/
+
+# Development leftovers
+backup/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/node_modules/
+*.bak
+*.tmp
+*.log
+progress.txt
+collaudo.txt
+dafa.txt
