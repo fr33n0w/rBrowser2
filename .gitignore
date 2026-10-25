@@ -1,0 +1,9 @@
+# Your own data: never in the repository. rBrowser makes all of it on the
+# first start (settings, identities and their private keys, LXMF chats,
+# page cache, files received).
+settings/
+identities/
+cache/
+downloads/
+nomadnet_browser_identity
+*.pid
