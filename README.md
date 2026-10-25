@@ -1,4 +1,4 @@
-# rBrowser: Standalone NomadNet Browser
+# rBrowser2: Standalone Reticulum Browser
 
 A modern, web-based UI for exploring **NomadNet** nodes and pages over the **Reticulum** network, with integrated LXMF, RRC, BBS & RMAP Clients.
 
