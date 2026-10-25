@@ -1,0 +1,78 @@
+# Git
+.git
+.gitignore
+
+# Your own data: never baked into the image. The private key above all -
+# anyone with the image would have it. In the container these live in
+# volumes (see docker-compose.yaml).
+nomadnet_browser_identity
+identities/
+cache/
+settings/
+downloads/
+backup/
+bin/
+progress.txt
+collaudo.txt
+dafa.txt
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache
+.coverage
+htmlcov
+*.egg-info
+dist
+build
+
+# Virtual environments
+venv
+env
+ENV
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Documentation
+README.md
+docs/
+
+# Tests
+tests/
+*_test.py
+*test_*.py
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+bin/
+
+# README images: not needed in the image
+screenshots/
