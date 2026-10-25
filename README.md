@@ -1,6 +1,6 @@
-# rBrowser2: Standalone Reticulum Browser
+# rBrowser: Standalone NomadNet Browser
 
-A modern, web-based UI for exploring NomadNet nodes and pages over the Reticulum network, with LXMF, RRC, BBS Clients and integrated RMAP.WORLD support for external nodes discovery.
+A modern, web-based UI for exploring **NomadNet** nodes and pages over the **Reticulum** network, with integrated LXMF, RRC, BBS & RMAP Clients.
 
 ![rBrowser 2](screenshots/nomadnet.jpg)
 
@@ -27,10 +27,10 @@ A modern, web-based UI for exploring NomadNet nodes and pages over the Reticulum
 
 ## New in version 2.0
 
-Version 2.0 is a substantial refactor and update of the first rBrovser. The
+Version 2.0 is a substantial refactor rather than a feature release. The
 goal was a browser that renders a NomadNet page the way NomadNet renders it,
 and that behaves on the network the way a well-mannered Reticulum client
-should. Optimized For Desktop PC's and Mobile Phones.
+should.
 
 **Rendering now matches NomadNet.** Micron is laid out in character cells,
 and several defects were quietly breaking that grid: runs of spaces were
@@ -65,13 +65,12 @@ switched on by hand, but once enabled every node that announced had its
 index requested automatically, and an option extended that to a list of
 further pages. Over TCP this only added useless traffic, but over LoRa it
 used up shared airtime that other users of the network need. Now rBrowser
-only requests the pages you open yourself without any automatic background
-traffic.
+only requests the pages you open yourself.
 
 **What replaced it: a cache of the pages you have read.** NomadNet keeps a
 copy of the pages it fetches, and so does rBrowser now. A page you open is
 written to disk; the next time you open it, it appears immediately and
-nothing goes over the radio or on the net - for as long as the node allows, as in NomadNet
+nothing goes over the radio - for as long as the node allows, as in NomadNet
 (see below). The header says which happened - `live` or `from cache`, with
 the age of the copy - so a fast load is never mistaken for a fast node.
 Reload always goes to the node, whatever the setting. If a node has gone
@@ -82,9 +81,9 @@ Because those pages are on disk, they can be searched: the **Local Search
 Engine** (magnifier button in the top bar, or the empty tab; in a window or, Settings >
 NomadNet Browser, in a tab of its own that fits the window and whose results
 open in new tabs; it searches while you type, x clears it, "show" sets how many results; the window/tab choice is kept on the server, the same from every address) looks through everything you have read, by text, title, node name or
-path. It is a search engine over your own local history, and the distinction from
+path. It is a search engine over your own history, and the distinction from
 the old crawler is the whole point - it cannot reach the network at all, so
-it can only find what you went and looked at yourself previously.
+it can only find what you went and looked at yourself.
 
 The cache is on by default and entirely under your control in Settings:
 whether pages are stored, whether stored pages are served, an age limit, a
@@ -112,7 +111,7 @@ saves it as a normal identity, the only way back to accounts made with it.
 Your existing `nomadnet_browser_identity` is the default one, unchanged.
 Pages seen while identified are never stored in the page cache.
 
-**Auto-identify setting.** Each node remembers the identity you first identified to it
+**Auto-identify.** Each node remembers the identity you first identified to it
 with. Switched on, rBrowser sends the fingerprint on its own, with that
 identity, when you open one of its pages - once per node per session. If a
 different identity is in use, it asks before switching.

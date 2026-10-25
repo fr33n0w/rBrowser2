@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <!-- maximum-scale=1 and user-scalable=no used to be here, which is what
+         stopped pinch zoom working on a phone. A browser for pages laid out
+         in character cells is exactly the kind of thing you want to pinch
+         into, and blocking it also removes an accessibility affordance the
+         platform provides for free. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <!-- This page is dark on purpose. Without the declaration, Chrome on
+         Android applies its "Auto Dark Theme" to pages it judges to be
+         light and inverts their colours - which is why the interface came
+         out with its palette flipped on a phone but not on a desktop. -->
+    <meta name="color-scheme" content="dark">
+    <title>rBrowser v2.0.0b - Standalone Reticulum Browser</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <!-- Absolute paths: the page is also served at /<hash>:/page/x.mu, where
+         a relative path resolves under that URL and gets this page back. -->
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="main">
+        <div class="sidebar" style="position: relative;">
+            <!-- The three rows above the list line up with the three on the
+                 right - tab bar, navigation bar, page header - in height,
+                 colour and controls. Favorites first, then search, then sort
+                 right above the list it orders. -->
+            <div class="favorites-section" id="favorites-section">
+                <button class="favorites-toggle" id="favorites-toggle" onclick="toggleFavoritesSection()"
+                        aria-expanded="false" title="Show favorites">
+                    <span class="favorites-star">★</span>
+                    <span class="favorites-label">Favorites</span>
+                    <span class="favorites-count" id="favorites-count">0</span>
+                    <svg class="favorites-chevron" viewBox="0 0 16 16" width="12" height="12" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M4 6l4 4 4-4"></path>
+                    </svg>
+                </button>
+                <button class="favorites-add" id="add-favorite-btn" onclick="showAddFavoriteDialog()"
+                        title="Add a favorite by address">+</button>
+                <button class="favorites-toggle history-toggle" id="history-toggle" onclick="toggleHistorySection()"
+                        aria-expanded="false" title="Show the pages you opened">
+                    <svg class="history-icon" viewBox="0 0 16 16" width="13" height="13" fill="none"
+                         stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="8" cy="8" r="6"></circle>
+                        <path d="M8 4.5V8l2.5 1.5"></path>
+                    </svg>
+                    <span class="favorites-label">History</span>
+                    <svg class="favorites-chevron history-chevron" viewBox="0 0 16 16" width="12" height="12" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M4 6l4 4 4-4"></path>
+                    </svg>
+                </button>
+                <div class="favorites-list" id="favorites-list">
+                    <div class="favorites-empty">No favorites yet</div>
+                </div>
+                <div class="favorites-list history-list" id="history-list">
+                    <div class="favorites-empty">No history yet</div>
+                </div>
+            </div>
+            <div class="search-container">
+                <div class="search-wrapper">
+                    <svg class="search-icon" viewBox="0 0 24 24" width="14" height="14" fill="none"
+                         stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">
+                        <circle cx="11" cy="11" r="7"></circle>
+                        <line x1="16.5" y1="16.5" x2="21" y2="21"></line>
+                    </svg>
+                    <input type="text" class="node-search" id="node-search" placeholder="Search nodes, favorites, saved pages..." autocomplete="off" oninput="toggleClearButton(); filterNodes()">
+                    <button class="search-clear" id="search-clear" onclick="clearSearch()" style="display: none;" title="Clear the search">×</button>
+                </div>
+            </div>
+            <div class="sort-container">
+                <label class="sort-label" for="node-sort">Sort</label>
+                <select id="node-sort" onchange="sortAndFilterNodes()">
+                    <option value="original">Original Order (Announce Time)</option>
+                    <option value="recent">Most Recent First</option>
+                    <option value="frequent">Most Announced First</option>
+                    <option value="visited">Most Visited by You</option>
+                    <option value="alphabetical">Alphabetical (A-Z)</option>
+                </select>
+            </div>
+            <div class="node-list-container" style="position: absolute !important; top: 158px !important; bottom: 52px !important; left: 0 !important; right: 0 !important; overflow-y: auto !important;">
+                <div class="node-list" id="node-list">
+                    <div class="node-list-empty" style="text-align: center; padding: 20px; color: #d2d7df; font-size: 12px;">Scanning for nodes...</div>
+                </div>
+            </div>
+            <div class="sidebar-resizer" title="Drag to resize the list - double-click to hide it"></div>
+            <div class="status-bar" style="position: absolute !important; bottom: 0 !important; left: 0 !important; right: 0 !important; margin: 0 !important; height: 52px !important; min-height: 52px !important; max-height: 52px !important; box-sizing: border-box !important; white-space: nowrap; overflow: hidden;"
+                 title="Connection status, announces received and NomadNet nodes heard">
+                <!-- Three lines in a 52px bar (the third: CPU/RAM): kept short and unwrapped. The old
+                     wording wrapped to three lines and the last one was cut. -->
+                <div class="sb-row"><span class="sb-label">Status:</span><span class="status-indicator" id="connection-status"><span class="sb-dot"></span><span class="sb-text">Initializing...</span></span></div>
+                <div class="sb-row sb-stats">
+                    <span class="sb-stat" title="Announces received since rBrowser started"><span class="sb-label"><span class="sb-long">Total announces</span><span class="sb-short">Announces</span>:</span><span class="count" id="announce-count">0</span></span>
+                    <span class="sb-stat" title="NomadNet nodes in the list"><span class="sb-label">NomadNet<span class="sb-long"> nodes</span>:</span><span class="count" id="node-count">0</span></span>
+                </div>
+                <div class="sb-row sb-usage-row"><span class="sb-usage" id="sb-usage" hidden></span></div>
+            </div>
+        </div>
+            <div class="content">
+            <div class="tab-bar">
+                <div class="tabs-container" id="tabs-container">
+                    <!-- The new-tab control is a tab itself, right after the
+                         page tabs (created dynamically before it); then the
+                         app tabs, then Settings (desktop only). -->
+                    <div class="tab tab-new" id="new-tab-control" onclick="createNewTab()"
+                         title="Open a new tab">+</div>
+                    <div class="tab tab-new tab-gear" id="tab-bar-settings" onclick="showSettings()"
+                         title="Settings"></div>
+                </div>
+            </div>
+            <div class="tab-content-wrapper" id="tab-content-wrapper">
+                <!-- Each tab will have its own content area -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Full screen page view: the one line left of the browser around the
+         page. Shown only while body has .page-fullscreen. -->
+    <div class="fullscreen-bar" id="fullscreen-bar">
+        <span class="fullscreen-title"></span>
+        <span class="fullscreen-address" title="Click to copy the address"></span>
+        <button class="fullscreen-exit fullscreen-shot" onclick="confirmPageScreenshot()"
+                title="Screenshot of the whole page, saved to your downloads">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 stroke-linejoin="round" style="vertical-align: middle;">
+                <path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"></path>
+                <circle cx="12" cy="13.5" r="3.5"></circle>
+            </svg>
+        </button>
+        <button class="fullscreen-exit" onclick="togglePageFullscreen(false)"
+                title="Leave full screen (Esc)">✕</button>
+    </div>
+
+    <template id="tab-content-template">
+    <div class="tab-content">
+        <div class="nav-bar">
+            <button class="nav-btn sidebar-toggle-btn" onclick="toggleSidebar()" title="Hide the node list and read full width">&laquo;</button>
+            <div class="nav-controls">
+                <button class="nav-btn back-btn" onclick="navigateBack()" disabled>←</button>
+                <button class="nav-btn forward-btn" onclick="navigateForward()" disabled>→</button>
+                <button class="nav-btn reload-btn" onclick="refreshPage()" title="Reload from the node"><span class="reload-icon">⟳</span></button>
+                <button class="nav-btn home-btn" onclick="navigateHome()" title="Go to index.mu homepage">🏠</button>
+            </div>
+            <!-- Where the page on screen came from: live, cache or an
+                 offline copy. Filled by setPageSource(). -->
+            <button class="source-pill" hidden onclick="sourcePillClick(this)"></button>
+            <input type="text" class="address-bar" id="address-bar" placeholder="hash:/page/index.mu - or type a name to search" autocomplete="off" spellcheck="false" onkeypress="handleAddressBarEnter(event)">
+            <button class="go-btn" onclick="navigateToUrl()" title="Navigate to current url page"><img src="/templates/go.png" alt="" style="width: 19px; height: 19px; vertical-align: middle;"></button>
+            <button class="star-btn" onclick="addCurrentPageToFavorites()" title="Add current page to favorites"><img src="/templates/star.png" alt="" style="width: 21px; height: 21px; vertical-align: middle;"></button>
+            <button class="info-btn-nav" onclick="showCurrentNodeInfo()" title="Show current node info"><img src="/templates/info.png" alt="Info" style="width: 20px; height: 20px; vertical-align: middle;"></button>
+            <button class="ping-btn" onclick="pingCurrentNode()" title="Ping current node">
+                <img src="/templates/ping.png" alt="Ping" title="Ping remote Node" style="width: 20px; height: 20px; vertical-align: middle;">                
+            </button>
+            <!-- Forget the path to this node and ask for a new one: for a
+                 node that announced and still times out. -->
+            <button class="path-btn" onclick="requestPathCurrentNode()"
+                    title="Request a new path to this node">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                     stroke-linejoin="round" style="vertical-align: middle;">
+                    <circle cx="5" cy="18" r="2.5"></circle>
+                    <circle cx="19" cy="6" r="2.5"></circle>
+                    <path d="M7.5 18H15a3.5 3.5 0 0 0 0-7H9a3.5 3.5 0 0 1 0-7h7.5"></path>
+                </svg>
+            </button>
+            <button class="fingerprint-btn" onclick="sendFingerprintToCurrentNode()" title="Send fingerprint to current node">
+                <img src="/templates/fingerprint.png" alt="" style="width: 20px; height: 20px; vertical-align: middle;">                
+            </button>
+            <button class="search-engine-btn" onclick="showCacheSearch()"
+                    title="Local Search Engine: the pages you have visited - names, hashes, paths and page text">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none"
+                     stroke="currentColor" stroke-width="2.2" stroke-linecap="round"
+                     stroke-linejoin="round" style="vertical-align: middle;">
+                    <circle cx="11" cy="11" r="7"></circle>
+                    <line x1="16.5" y1="16.5" x2="21" y2="21"></line>
+                </svg>
+            </button>
+            <button class="screenshot-btn" onclick="confirmPageScreenshot()"
+                    title="Screenshot of the whole page, saved to your downloads">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                     stroke-linejoin="round" style="vertical-align: middle;">
+                    <path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"></path>
+                    <circle cx="12" cy="13.5" r="3.5"></circle>
+                </svg>
+            </button>
+            <!-- Freezes the node list while you read it; announces keep
+                 being heard and come in when it runs again. -->
+            <button class="announce-pause-btn" id="announce-pause-btn" onclick="toggleNodeListPause()"
+                    title="Pause the node list: new announces wait until you press it again">
+                <svg class="icon-pause" viewBox="0 0 24 24" width="19" height="19" fill="currentColor"
+                     style="vertical-align: middle;"><rect x="6" y="5" width="4" height="14" rx="1"></rect><rect x="14" y="5" width="4" height="14" rx="1"></rect></svg>
+                <svg class="icon-play" viewBox="0 0 24 24" width="19" height="19" fill="currentColor"
+                     style="vertical-align: middle;"><path d="M7 5v14l12-7z"></path></svg>
+            </button>
+            <button class="settings-btn" onclick="showSettings()" title="Settings: identity, appearance, images, cache">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                     stroke-linejoin="round" style="vertical-align: middle;">
+                    <circle cx="12" cy="12" r="3"></circle>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                </svg>
+            </button>
+        </div>
+
+        <div class="header">
+            <div class="page-info">
+                <span class="page-title"><center>Select a node from the announce list, favorites, or paste an address into the bar to navigate pages.</center></span>
+                <span class="page-details"></span>
+            </div>
+            
+            <!-- New container for all header buttons -->
+            <div class="header-buttons">
+                <div class="zoom-control">
+                    <button class="zoom-btn zoom-out" onclick="changePageZoom(-1)"
+                            title="Smaller text (Ctrl + minus)">&minus;</button>
+                    <button class="zoom-level" onclick="resetPageZoom()"
+                            title="Current text size - click to go back to 100%">100%</button>
+                    <button class="zoom-btn zoom-in" onclick="changePageZoom(1)"
+                            title="Larger text (Ctrl + plus)">+</button>
+                </div>
+                <button class="fullscreen-btn" onclick="togglePageFullscreen()"
+                        title="Show only the page, full screen (Esc to leave)">Full</button>
+                <button class="center-toggle" onclick="toggleCenterPages()"
+                        title="Center all pages: a page narrower than the window sits in the middle instead of against the left edge">Center</button>
+                <button class="view-toggle" title="Toggle between rendered and raw view"><span class="label-long">Raw View</span><span class="label-short">Raw</span></button>
+                <!-- Text labels only, all the same height: this row used to
+                     mix an emoji, an icon and text, each at its own size. -->
+                <button class="auto-reload-btn" onclick="showAutoReloadSettings()" title="Auto-reload settings">
+                    <span class="auto-reload-label">Timer</span><span class="reload-countdown"></span>
+                </button>
+                <!-- Which identity a fingerprint would present. Nodes do not
+                     see it until you identify; click to choose another. -->
+                <button class="identity-chip" onclick="toggleBrowserIdentityMenu(this)" title="Identity">
+                    <span class="identity-chip-name">…</span>
+                </button>
+                <!-- Remembers the nodes you identify to, and sends the
+                     fingerprint on its own the next time you open one of
+                     their pages, so the node recognises you without a click. -->
+                <button class="auto-identify-btn" onclick="toggleAutoIdentify()"
+                        title="Auto-identify to this node">
+                    <span class="auto-identify-label"><span class="label-long">Auto ID</span><span class="label-short">Auto</span></span>
+                </button>
+                <!-- The same as the x on the tab, where the hand already is. -->
+                <button class="page-close-btn" onclick="closeTab(activeTabId)" title="Close this page" aria-label="Close this page">&times;</button>
+            </div>
+        </div>
+
+        <div class="browser-area">
+            <div class="page-content">
+                <!-- The same look as the clients' empty pages (clientWelcome). -->
+                <div class="welcome">
+                    <div class="client-welcome">
+                        <h2 class="rb-version">rBrowser v2.0.0b</h2>
+                        <span class="bbs-title"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor"
+                            stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 4h8M5.5 8h8M5.5 12h8"/><circle cx="2.5" cy="4" r=".8"/><circle cx="2.5" cy="8" r=".8"/><circle cx="2.5" cy="12" r=".8"/></svg><span>NomadNet Browser</span></span>
+                    </div>
+                    <p class="welcome-text">Pick a node from the announce list (on a phone: the Nodes button, or swipe from the left edge), or type an address in the bar above.<br>
+                        Nodes are found from their announces; favourites, history and cached pages stay with you.</p>
+                    <!-- Searches only the pages you opened yourself, kept on disk. -->
+                    <button class="welcome-search-btn" onclick="showCacheSearch()">Local Search Engine</button>
+                </div>
+            </div>
+        </div>
+        <div class="scroll-hint" role="button" tabindex="0"
+             title="There is more below - scroll with the wheel, the arrow keys, or a swipe"></div>
+        <div class="shortcuts-bar">
+            <span class="shortcut-item">
+                <kbd>Alt + N</kbd> New Tab
+            </span>
+            <span class="shortcut-item">
+                <kbd>Alt + X</kbd> Close Current Tab
+            </span>
+            <span class="shortcut-item">
+                <kbd>Alt + B</kbd> Reload Current Page
+            </span>
+            <span class="shortcut-item">
+                <kbd>Alt + F</kbd> Add current page to favorites
+            </span>
+            <span class="shortcut-item">
+                <kbd>Ctrl + Left or Right arrows</kbd> Switch Tabs
+            </span>
+            <span class="shortcut-item">
+                <kbd>Ctrl + X</kbd> Close all other tabs
+            </span>
+            <span class="shortcut-item">
+                <kbd>Alt + I</kbd> Fingerprint 
+            </span>
+        </div>
+    </div>
+</template>
+
+    <!-- Load local DOMPurify js for html security -->
+    <script src="/script/purify.min.js"></script>
+
+    <script src="/script/rbrowser.js"></script>
+    <script src="/script/messenger.js"></script>
+    <script src="/script/retibbs.js"></script>
+    <script src="/script/rrc.js"></script>
+    <script src="/script/rmap.js"></script>
+    <script src="/script/tooltips.js"></script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+services:
+  rbrowser:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Keep the default identity key inside the identities volume below.
+      - RBROWSER_DEFAULT_IDENTITY=identities/nomadnet_browser_identity
+    # Your data lives in these volumes, so it survives rebuilding the image
+    # ("docker compose up -d --build") and recreating the container:
+    #   identities - your identity keys (private keys: the address nodes know you by)
+    #   settings   - identity list, auto-identify nodes, favorites, cache settings
+    #   cache      - the pages you have visited, used by the local search
+    # "docker compose down" keeps them; only "docker compose down -v" deletes them.
+    volumes:
+      - rbrowser-identities:/app/identities
+      - rbrowser-settings:/app/settings
+      - rbrowser-cache:/app/cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5000/api/status | grep -q 'identity_hash' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  rbrowser-identities:
+  rbrowser-settings:
+  rbrowser-cache:
+
+# Optional, for development: mount the source directory instead, by adding
+# these lines under "volumes:" in the service above
+#      - ./:/app
+#      - /app/__pycache__  # prevent overwriting container cache if needed
