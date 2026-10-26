@@ -165,7 +165,8 @@ def main() -> int:
                         help="Stop opening those links in rBrowser, then exit")
     args = parser.parse_args()
     if args.register_links or args.unregister_links:
-        from rbrowser import links
+        # links is the module imported at the top: importing it again here
+        # made it local to main(), and the start below failed on it.
         try:
             state = links.register() if args.register_links else links.unregister()
         except Exception as exc:
