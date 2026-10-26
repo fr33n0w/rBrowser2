@@ -13,6 +13,7 @@ update is out, and shows the new entries in Settings > About.
 - RRC chat on phones: each message is one flowing line, the text wraps under the whole line; the tab of the room you open scrolls into view.
 - `rrc://<hub>:<dest>/<room>` links (NomadNet's form) are read correctly.
 - What's new in an update is shown in Settings > About and in the update window (this file).
+- NomadNet pages: a section heading takes the colours of its first text for the whole bar, as in NomadNet (headings starting with a colour code were hard to read).
 
 ## 2.0.0b - 2026-10-25
 

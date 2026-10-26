@@ -333,7 +333,14 @@ class MicronParser {
                             const outerDiv = document.createElement("div");
                             outerDiv.style.display = "inline-block";
                             outerDiv.style.width = "100%";
-                            this.applyStyleToElement(outerDiv, style);
+                            // The bar takes the style of the heading's first
+                            // run, as NomadNet does (MicronParser.py:
+                            // heading_style = first_style): a heading that
+                            // starts with `B000`f is a black bar with the
+                            // page's own text colour, not the grey default
+                            // with the text sitting on a black island.
+                            const first = outputParts[0];
+                            this.applyStyleToElement(outerDiv, Array.isArray(first) && first[0] ? first[0] : style);
 
                             const innerDiv = document.createElement("div");
                             this.applySectionIndent(innerDiv, state);
