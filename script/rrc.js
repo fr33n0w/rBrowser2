@@ -820,14 +820,22 @@ function rrcPane(address, room) {
 
 function rrcTime(ts) {
     const d = new Date(ts * 1000);
-    return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2, '0')).join(':');
+    const p = n => String(n).padStart(2, '0');
+    return `${p(d.getDate())}/${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+// [dd/mm hh:mm:ss] on a desktop; a phone hides the date, the seconds and the
+// brackets (.rrc-ts-x in style.css), the whole time stays in the tooltip.
+function rrcStamp(ts) {
+    const t = rrcTime(ts);
+    return `<span class="rrc-ts" title="${t}"><span class="rrc-ts-x">[${t.slice(0, 6)}</span>${t.slice(6, 11)}<span class="rrc-ts-x">${t.slice(11)}]</span></span>`;
 }
 
 // Links, as NomadNet's chat makes them: web addresses, lxmf@<hash> or lxmf://<hash> (the
 // messenger), a 32 hex address with an optional :/page path (NomadNet), a
 // #room (joined on this hub), an RRC hub (rrc://<hash>/room, MeshChatX's
 // meshchatx://relay?hub=...). And `code`.
-const RRC_LINKS = /(\bhttps?:\/\/[^\s<>"']*[^\s<>"'.,;:!?)\]])|(?<![\w@])lxmf(?:@|:\/\/)([0-9a-f]{32})(?!\w)\/?|(?<![@\w/])([0-9a-f]{32}(?::\/[^\s<>"']*[^\s<>"'.,;:!?)\]])?)(?![\w])|(?<![\w&#])#([a-z0-9][a-z0-9_\-]{0,62})|`([^`\n]+)`|(\b(?:rrc:\/\/[0-9a-f]{32}(?:\/[^\s<>"']*[^\s<>"'.,;:!?)\]])?|(?:meshchatx|meshchat):\/\/relay\?[^\s<>"']+))/gi;
+const RRC_LINKS = /(\bhttps?:\/\/[^\s<>"']*[^\s<>"'.,;:!?)\]])|(?<![\w@])lxmf(?:@|:\/\/)([0-9a-f]{32})(?!\w)\/?|(?<![@\w/])([0-9a-f]{32}(?::\/[^\s<>"']*[^\s<>"'.,;:!?)\]])?)(?![\w])|(?<![\w&#])#([a-z0-9][a-z0-9_\-]{0,62})|`([^`\n]+)`|(\b(?:rrc:\/\/[0-9a-f]{32}(?::[\w.\-]+)?(?:\/[^\s<>"']*[^\s<>"'.,;:!?)\]])?|(?:meshchatx|meshchat):\/\/relay\?[^\s<>"']+))/gi;
 
 function rrcText(text) {
     const src = String(text || '');
@@ -889,7 +897,7 @@ function rrcLineEl(line, pane, me) {
     const said = line.kind === 'msg' || line.kind === 'action' || (line.kind === 'notice' && line.src);
     div.className = `rrc-line rrc-${line.kind}${said ? ' rrc-said' : ''}${line.mention ? ' rrc-mention' : ''}${own ? ' rrc-own' : ''}${cont ? ' rrc-cont' : ''}`;
     if (said) div.style.setProperty('--rrc-bar', color);
-    const ts = `<span class="rrc-ts">${cont ? '' : `[${rrcTime(line.ts)}]`}</span>`;
+    const ts = cont ? '<span class="rrc-ts"></span>' : rrcStamp(line.ts);
     const nick = rrcEsc(line.nick || '?');
     const nickHtml = `<span class="rrc-nick" style="color:${color}" data-rrc-nick="${nick}" data-src="${rrcEsc(line.src || '')}"
         title="${own ? 'you' : rrcEsc(line.src)} - click: menu">${nick}</span>`;
@@ -962,7 +970,7 @@ function rrcFoldJoin(pane, line) {
     if (g.joined.length) parts.push(`<span class="rrc-g-join">${rrcSign('join')}</span> ${names(g.joined)} joined${rrcWhere(g)}`);
     if (g.left.length) parts.push(`<span class="rrc-g-part">${rrcSign('part')}</span> ${names(g.left)} left${rrcWhere(g)}`);
     g.el.className = 'rrc-line rrc-join rrc-joins';
-    g.el.innerHTML = `<span class="rrc-ts">[${rrcTime(g.ts)}]</span><span class="rrc-sign">${rrcSign('fold')}</span><span class="rrc-text">${parts.join(' · ')}</span>`;
+    g.el.innerHTML = `${rrcStamp(g.ts)}<span class="rrc-sign">${rrcSign('fold')}</span><span class="rrc-text">${parts.join(' · ')}</span>`;
     const at = g.room ? ` #${g.room}` : '';
     g.el.title = [...g.joined.map(n => `${n} joined${at}`), ...g.left.map(n => `${n} left${at}`)].join('\n');
     pane.last = line;
@@ -1119,6 +1127,22 @@ function renderRrcTabs() {
     }).join('');
     // Not while a tab is being dragged: redrawn under it, the drag stopped.
     if (strip.dataset.html !== html && !Rrc.draggingTab) { strip.dataset.html = html; strip.innerHTML = html; }
+    rrcTabIntoView(strip);
+}
+
+// A window opened from elsewhere (the badge on the RRC tab, a #room link):
+// on a phone its tab may be off the strip, so the strip scrolls to it. Only
+// when the window changes, a strip scrolled by hand is left where it is.
+function rrcTabIntoView(strip) {
+    const key = Rrc.active ? rrcKey(Rrc.active.hub, Rrc.active.room) : '';
+    if (strip.dataset.shown === key || !strip.clientWidth) return;
+    const tab = strip.querySelector('.rrc-tab.active');
+    if (!tab) return;
+    strip.dataset.shown = key;
+    const left = tab.getBoundingClientRect().left - strip.getBoundingClientRect().left + strip.scrollLeft;
+    if (left < strip.scrollLeft || left + tab.offsetWidth > strip.scrollLeft + strip.clientWidth) {
+        strip.scrollTo({ left: Math.max(0, left - (strip.clientWidth - tab.offsetWidth) / 2), behavior: 'smooth' });
+    }
 }
 
 function renderRrcHead() {
@@ -1321,7 +1345,8 @@ function rrcParseAddress(text) {
     const s = String(text || '').trim();
     const m = s.match(/([0-9a-f]{32})/i);
     if (!m) return null;
-    const after = s.slice(m.index + 32).replace(/^[:/]+/, '').trim();
+    // NomadNet's rrc://<hub>:<dest_name>/<room>: the dest name is not the room.
+    const after = s.slice(m.index + 32).replace(/^:[^/\s]*(?=\/)/, '').replace(/^[:/]+/, '').trim();
     const room = after.replace(/^#/, '').split(/[\s/?]/)[0] || '';
     return { hub: m[1].toLowerCase(), room };
 }

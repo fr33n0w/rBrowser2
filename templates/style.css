@@ -10858,7 +10858,7 @@ body.sidebar-collapsed .sidebar-toggle-btn {
 
 .rrc-ts {
     flex: none;
-    width: 10ch;
+    width: 16ch;
     color: #6e7681;
 }
 
@@ -11311,10 +11311,30 @@ body.sidebar-collapsed .sidebar-toggle-btn {
         display: inline-block;
     }
 
+    /* One flowing line, as in phone IRC clients: time, nick, then the text
+       wraps under the whole line instead of in a narrow column. */
+    .rrc-line {
+        display: block;
+    }
+
     .rrc-ts {
         width: auto;
         white-space: nowrap;
         font-size: 11px;
+        margin-right: 6px;
+    }
+
+    .rrc-ts-x {
+        display: none;
+    }
+
+    .rrc-who,
+    .rrc-sign {
+        margin-right: 6px;
+    }
+
+    .rrc-sign {
+        vertical-align: top;
     }
 
     /* The nick is in the head already: the line is all for typing. */
@@ -12286,3 +12306,11 @@ body.app-window .content {
 .settings-update-howto ul { margin: 4px 0 0; padding-left: 18px; }
 .settings-update-howto li { margin: 3px 0; }
 .settings-update-howto code { font-size: 0.95em; }
+
+/* What is new in an update (CHANGELOG.md): About and the update window. */
+.update-news { margin-top: 10px; max-height: 260px; overflow-y: auto; line-height: 1.45; text-align: left; }
+.update-news-version { margin-top: 6px; font-weight: 700; color: #f0f6fc; }
+.update-news-version span { font-weight: 400; color: #8b949e; }
+.update-news ul { margin: 3px 0 0; padding-left: 18px; }
+.update-news li { margin: 3px 0; }
+.update-news code { font-size: 0.95em; }

@@ -2565,7 +2565,7 @@ function linkify(text) {
 //     the LXMF menu (send a message, add to contacts, check...);
 //   <hash>:/path: a NomadNet page; http(s)://: the web.
 //   rrc://<hash>[/room] and MeshChatX's meshchatx://relay?hub=...: RRC chat.
-const MSG_LINKS = /(\blxmf(?:@|:\/\/)([0-9a-f]{32})(?![0-9a-z])\/?)|(\b(?:rrc:\/\/[0-9a-f]{32}(?:\/[^\s<\u0000]*)?|(?:meshchatx|meshchat):\/\/relay\?[^\s<\u0000]+))|\b([0-9a-f]{32}):(\/[\w\-./%~]*)|(\bhttps?:\/\/[^\s<\u0000]+)|\b([0-9a-f]{32})\b/gi;
+const MSG_LINKS = /(\blxmf(?:@|:\/\/)([0-9a-f]{32})(?![0-9a-z])\/?)|(\b(?:rrc:\/\/[0-9a-f]{32}(?::[\w.\-]+)?(?:\/[^\s<\u0000]*)?|(?:meshchatx|meshchat):\/\/relay\?[^\s<\u0000]+))|\b([0-9a-f]{32}):(\/[\w\-./%~]*)|(\bhttps?:\/\/[^\s<\u0000]+)|\b([0-9a-f]{32})\b/gi;
 
 function linkifyEscaped(html, wrap = x => x) {
     return html.replace(MSG_LINKS, (all, lxmf, lxmfHash, rrc, pageHash, path, url, bare) => {

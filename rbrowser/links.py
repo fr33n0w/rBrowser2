@@ -1,5 +1,5 @@
 """
-nomadnetwork:// and rbrowser:// links that open in rBrowser.
+nomadnetwork://, rrc:// and rbrowser:// links that open in rBrowser.
 
 Registered with the system, a click on such a link (on rmap, in a chat, in
 a document) runs "rBrowser.py --open <link>". That process does not become a
@@ -7,6 +7,15 @@ second rBrowser: it looks for the one already running on the saved port,
 starts it if there is none, and opens the page in the rBrowser page already
 open on this computer (a new tab in it, see LinkInbox), or else in the
 system browser as http://<rBrowser>/?url=<link>, which the page understands.
+
+What a link holds is NomadNet's own link syntax (nomadnet/ui/textui/
+Browser.py), not one of ours: <hash>:/page/..., nnn@<hash>, lxmf@<hash>,
+rrc://<hub>[:<dest>]/<room>, rrc@<hub> and <aspect>@<hash>. nomadnetwork://
+and rrc:// are the common schemes any client can register; rbrowser:// is
+the same content for a button that means rBrowser and nothing else.
+
+Links are on by default: at every start the schemes no other program has
+are registered (auto_register), unless they were turned off in Settings.
 
 Where the registration lives:
   Windows  HKCU\\Software\\Classes\\<scheme> (this user only, no admin)
@@ -30,9 +39,14 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-SCHEMES = ("nomadnetwork", "rbrowser")
+SCHEMES = ("nomadnetwork", "rbrowser", "rrc")
 DESKTOP_FILE = "rbrowser-links.desktop"
 _HASH_RE = re.compile(r"[a-fA-F0-9]{32}")
+_PATH_RE = re.compile(r":?/(?:page|file)/[A-Za-z0-9_\-./~]*(?:`[A-Za-z0-9_\-.=|:]*)?")
+# The user's choice in Settings > System > Links; no file = never chosen = on.
+CHOICE_FILE = os.path.join("settings", "links.json")
+# What another rBrowser folder registers (handler_command): rBrowser.py --open.
+_OTHER_COPY_RE = re.compile(r'rBrowser\.(?:py|exe)"?\s+"?--open', re.I)
 
 
 def _script() -> str:
@@ -130,15 +144,15 @@ def _linux_default(scheme: str) -> Optional[str]:
         return None
 
 
-def _linux_register() -> None:
+def _linux_register(schemes) -> None:
     path = _desktop_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     exec_line = " ".join(f'"{part}"' for part in handler_command()) + " %u"
-    mime = "".join(f"x-scheme-handler/{s};" for s in SCHEMES)
+    mime = "".join(f"x-scheme-handler/{s};" for s in schemes)
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("[Desktop Entry]\nType=Application\nName=rBrowser\n"
                      f"Exec={exec_line}\nNoDisplay=true\nTerminal=false\nMimeType={mime}\n")
-    for scheme in SCHEMES:
+    for scheme in schemes:
         subprocess.run(["xdg-mime", "default", DESKTOP_FILE, f"x-scheme-handler/{scheme}"],
                        capture_output=True, timeout=10)
 
@@ -169,6 +183,10 @@ def status() -> Dict[str, Any]:
             elif _script().lower() in command.lower() or (getattr(sys, "frozen", False)
                                                           and sys.executable.lower() in command.lower()):
                 state = "ours"
+            elif _OTHER_COPY_RE.search(command):
+                # Another rBrowser folder (an older download, a backup):
+                # not someone else's program, the start may take it over.
+                state, result["other"] = "copy", command
             else:
                 state, result["other"] = "other", command
         else:
@@ -180,19 +198,26 @@ def status() -> Dict[str, Any]:
             else:
                 state, result["other"] = "other", default
         result["schemes"][scheme] = state
-    result["registered"] = all(s == "ours" for s in result["schemes"].values())
+    # On when any is ours: the start leaves another program's schemes alone.
+    result["registered"] = any(s == "ours" for s in result["schemes"].values())
     return result
 
 
+def _register(schemes) -> None:
+    if os.name == "nt":
+        for scheme in schemes:
+            _win_register(scheme)
+    else:
+        _linux_register(schemes)
+
+
 def register() -> Dict[str, Any]:
+    """Turned on by hand: every scheme, also those another program had."""
     reason = platform_support()
     if reason:
         raise RuntimeError(reason)
-    if os.name == "nt":
-        for scheme in SCHEMES:
-            _win_register(scheme)
-    else:
-        _linux_register()
+    _register(SCHEMES)
+    save_choice(True)
     print(f"🔗 Links registered: {', '.join(s + '://' for s in SCHEMES)} open in rBrowser")
     return status()
 
@@ -202,6 +227,7 @@ def unregister() -> Dict[str, Any]:
     current = status()
     if not current["supported"]:
         return current
+    save_choice(False)
     if os.name == "nt":
         for scheme, state in current["schemes"].items():
             if state == "ours":
@@ -210,6 +236,50 @@ def unregister() -> Dict[str, Any]:
         _linux_unregister()
     print("🔗 Links no longer open in rBrowser")
     return status()
+
+
+def load_choice() -> Optional[bool]:
+    try:
+        with open(CHOICE_FILE, "r", encoding="utf-8") as handle:
+            value = json.load(handle).get("enabled")
+        return value if isinstance(value, bool) else None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def save_choice(enabled: bool) -> None:
+    try:
+        from .fileio import atomic_write_json
+        atomic_write_json(CHOICE_FILE, {"enabled": bool(enabled)})
+    except OSError:
+        pass
+
+
+def auto_register() -> None:
+    """At every start: the links are on unless turned off in Settings. Only
+    the schemes nobody has, ours already (refreshed: the folder may have
+    moved, an update may add a scheme) or another rBrowser folder's (the
+    one started last opens the links); another program's are never taken."""
+    if load_choice() is False or platform_support():
+        return
+    if "ANDROID_ROOT" in os.environ:
+        return
+    # A server, a Pi without a desktop: no browser there to click a link.
+    if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return
+    try:
+        states = status()["schemes"]
+        mine = [s for s in SCHEMES if states.get(s) in ("none", "ours", "copy")]
+        new = [s for s in mine if states.get(s) != "ours"]
+        if mine:
+            _register(mine)
+    except Exception:
+        return
+    if new:
+        try:
+            print(f"🔗 Links registered: {', '.join(s + '://' for s in new)} open in rBrowser (Settings > System > Links)")
+        except (UnicodeEncodeError, AttributeError, OSError):
+            pass
 
 
 # ---------------------------------------------------------------------- #
@@ -234,7 +304,63 @@ def page_link(link: str) -> str:
     rest = text[match.end():]
     if rest in ("", "/"):
         rest = ""
+    # Only a NomadNet path: /page/... or /file/..., request fields after a
+    # backtick. Anything else (markup, quotes, spaces, "..", a scheme) is no
+    # address: the link comes from any web page.
+    if rest and (not _PATH_RE.fullmatch(rest) or ".." in rest):
+        return ""
     return "nomadnetwork://" + match.group(0).lower() + rest
+
+
+# NomadNet's <aspect>@<hash> (its shorthands nnn, lxmf, rrc included): the
+# ones rBrowser has a client for.
+_ASPECT_KIND = {"nnn": "page", "nomadnetwork.node": "page", "lxmf": "lxmf", "lxmf.delivery": "lxmf",
+                "lxmf.propagation": "propnode", "rrc": "rrc", "rrc.hub.session": "rrc",
+                "retibbs.bbs": "bbs"}
+_ASPECT_RE = re.compile(r"([a-z][a-z0-9.\-]*)@([0-9a-fA-F]{32})(.*)$", re.I)
+# rrc://<hub>[:<dest_name>]/<room>, as NomadNet reads it; the room as rBrowser's chat links take it.
+_RRC_RE = re.compile(r"([0-9a-fA-F]{32})(?::[A-Za-z0-9_.\-]+)?(?:/#?([^/?#\s]*)/?)?")
+_ROOM_RE = re.compile(r"[a-z0-9][a-z0-9_\-]{0,62}")
+
+
+def _rrc_target(rest: str) -> Optional[Dict[str, str]]:
+    match = _RRC_RE.fullmatch(rest.lstrip("/"))
+    if not match:
+        return None
+    room = (match.group(2) or "").lower()
+    if room and not _ROOM_RE.fullmatch(room):
+        return None
+    return {"kind": "rrc", "address": "rrc://" + match.group(1).lower() + ("/" + room if room else "")}
+
+
+def link_target(link: str) -> Optional[Dict[str, str]]:
+    """
+    {'kind': page|lxmf|propnode|bbs|rrc, 'address': ...} for a link, or None.
+    A page's address is page_link()'s; an RRC one rrc://<hub>[/<room>]; the
+    others a bare hash. A browser may hand over the link reshaped as a URL
+    (the ':' before an empty path dropped, %-escapes): both shapes are read.
+    """
+    text = urllib.parse.unquote(str(link or "").strip())
+    for scheme in ("nomadnetwork", "rbrowser"):
+        if text.lower().startswith(scheme + ":"):
+            text = text[len(scheme) + 1:].lstrip("/")
+            break
+    # rrc://... on its own, or inside rbrowser:// (rbrowser://rrc://...).
+    if text.lower().startswith("rrc:"):
+        return _rrc_target(text[4:])
+    match = _ASPECT_RE.match(text)
+    if match:
+        kind = _ASPECT_KIND.get(match.group(1).lower())
+        hash_, rest = match.group(2).lower(), match.group(3)
+        if kind == "rrc":
+            return _rrc_target(hash_ + rest)
+        if kind == "page":
+            page = page_link(hash_ + rest)
+            return {"kind": "page", "address": page} if page else None
+        # A bare address: anything after it means the link is not well formed.
+        return {"kind": kind, "address": hash_} if kind and rest in ("", "/") else None
+    page = page_link(text)
+    return {"kind": "page", "address": page} if page else None
 
 
 def _base_url(host: str, port: int) -> str:
@@ -485,8 +611,17 @@ def open_link(link: str, port_forced: Optional[int] = None, wait: float = 60.0) 
         if running:
             host, port = running[0]["host"], running[0]["port"]
     base = _base_url(host, port)
-    target = page_link(link)
-    url = base + "/" + (("?url=" + urllib.parse.quote(target, safe="")) if target else "")
+    found = link_target(link)
+    # A page as before (?url=, the address bar); a client's link as the
+    # page's own ?link= (rbrowser.js openLinkTarget), handed over as JSON.
+    if not found:
+        target, url = "", base + "/"
+    elif found["kind"] == "page":
+        target = found["address"]
+        url = base + "/?url=" + urllib.parse.quote(target, safe="")
+    else:
+        target = json.dumps(found)
+        url = base + "/?link=" + urllib.parse.quote(target, safe="")
 
     if not _is_rbrowser(base):
         try:
@@ -505,9 +640,9 @@ def open_link(link: str, port_forced: Optional[int] = None, wait: float = 60.0) 
         return 0
     webbrowser.open(url)
     if link and not target:
-        _tell(f"Not a NomadNet address: {link}")
+        _tell(f"Not a link rBrowser can open: {link}")
     return 0
 
 
-__all__ = ["SCHEMES", "status", "register", "unregister", "page_link", "open_link", "inbox",
-           "handler_command", "platform_support"]
+__all__ = ["SCHEMES", "status", "register", "unregister", "auto_register", "page_link", "link_target",
+           "open_link", "inbox", "handler_command", "platform_support"]

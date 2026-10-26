@@ -6979,7 +6979,7 @@ function openMainWindow() {
 //   {kind: 'rrc',  address: 'rrc://<hash>[/room]'}
 
 const LINK_KEY = 'rbrowser_link_cmd';
-const LINK_CLIENT = { page: 'main', lxmf: 'lxmf', rrc: 'rrc' };
+const LINK_CLIENT = { page: 'main', lxmf: 'lxmf', rrc: 'rrc', bbs: 'bbs', propnode: 'main' };
 
 if (!APP_WINDOW) {
     const beat = () => { try { localStorage.setItem('rbrowser_main_alive', String(Date.now())); } catch (e) {} };
@@ -7002,11 +7002,26 @@ function relayUrlToRrc(value) {
 }
 
 function linkTargetValid(t) {
-    if (!t || !(t.kind in LINK_CLIENT)) return false;
+    if (!t || !Object.hasOwn(LINK_CLIENT, t.kind)) return false;
     const a = String(t.address || '');
-    if (t.kind === 'lxmf') return /^[0-9a-f]{32}$/.test(a);
-    if (t.kind === 'rrc') return /^rrc:\/\/[0-9a-f]{32}(\/[^<>"'\n]*)?$/i.test(a);
+    if (t.kind === 'lxmf' || t.kind === 'bbs' || t.kind === 'propnode') return /^[0-9a-f]{32}$/.test(a);
+    if (t.kind === 'rrc') return /^rrc:\/\/[0-9a-f]{32}(:[\w.\-]+)?(\/[^<>"'\n]*)?$/i.test(a);
     return /^[0-9a-f]{32}:\/[^\s<>"']*$/i.test(a);
+}
+
+// A link from outside rBrowser (?link=, ?url=, links.py): any web page can
+// make one, so only the well formed ones, as links.py link_target writes
+// them - a NomadNet path, a room name, a bare address. Marked external, so
+// joining a hub or a BBS is asked first (runLinkHere).
+const EXT_PAGE = /^[0-9a-f]{32}(:\/(page|file)\/[A-Za-z0-9_\-./~]*(`[A-Za-z0-9_\-.=|:]*)?)?$/i;
+function externalLinkTarget(t) {
+    // hasOwn: "constructor", "toString"... are "in" any object too.
+    if (!t || typeof t !== 'object' || typeof t.address !== 'string' || !Object.hasOwn(LINK_CLIENT, t.kind)) return null;
+    const a = t.address;
+    const ok = t.kind === 'page' ? EXT_PAGE.test(a) && !a.includes('..')
+        : t.kind === 'rrc' ? /^rrc:\/\/[0-9a-f]{32}(\/[a-z0-9][a-z0-9_\-]{0,62})?$/.test(a)
+        : /^[0-9a-f]{32}$/.test(a);
+    return ok ? { kind: t.kind, address: a, external: true } : null;
 }
 
 function windowAlive(win) {
@@ -7028,7 +7043,33 @@ function runLinkHere(t) {
         }
         openMessenger(t.address);
     } else if (t.kind === 'rrc') {
-        openRrcAddress(t.address);
+        // From a web page, a hub not open here: asked first (NomadNet asks too).
+        const hub = t.address.slice(6, 38).toLowerCase();
+        const known = typeof Rrc !== 'undefined' && Rrc.data && Rrc.data[hub];
+        if (t.external && !known) {
+            confirmDialog('RRC hub', `Connect to the RRC hub <code>${escapeHtml(hub)}</code>?`
+                + ` It sees your nick and identity. (A link opened from outside rBrowser.)`, 'Connect')
+                .then(ok => { if (ok) openRrcAddress(t.address); });
+        } else {
+            openRrcAddress(t.address);
+        }
+    } else if (t.kind === 'bbs') {
+        if (typeof retibbsEnabled !== 'function' || !retibbsEnabled()) {
+            showNotification('The BBS client is off: Settings > BBS Client', 'info', 5000);
+            return true;
+        }
+        const go = () => { openRetibbs(); retibbsConnect(t.address); };
+        if (t.external) {
+            confirmDialog('BBS', `Connect to the BBS <code>${escapeHtml(t.address)}</code>? (A link opened from outside rBrowser.)`, 'Connect')
+                .then(ok => { if (ok) go(); });
+        } else {
+            go();
+        }
+    } else if (t.kind === 'propnode') {
+        // Asked first, as in RMAP: it changes Settings > LXMF Messenger.
+        confirmDialog('Propagation node',
+            `Use <code>${escapeHtml(t.address)}</code> as your default propagation node? (Settings > LXMF Messenger)`,
+            'Use it').then(ok => { if (ok) usePropagationNode(t.address); });
     }
     return true;
 }
@@ -7070,7 +7111,9 @@ window.addEventListener('storage', e => {
     let pending = null;
     try {
         const raw = new URLSearchParams(location.search).get('link');
-        if (raw) pending = JSON.parse(raw);
+        // From links.py, another rBrowser window, or typed by any web page
+        // (?app= too): only a well formed one, treated as external.
+        if (raw) pending = externalLinkTarget(JSON.parse(raw));
     } catch (e) {}
     if (pending && linkTargetValid(pending)) {
         const params = new URLSearchParams(location.search);
@@ -8652,6 +8695,13 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
 
     function loadPageFromParameter(nomadnetUrl) {
+        // ?url= and /<hash>/... can be typed by any web page: only a well
+        // formed NomadNet address (as externalLinkTarget).
+        if (!EXT_PAGE.test(nomadnetUrl) || nomadnetUrl.includes('..')) {
+            window.history.replaceState({}, document.title, window.location.origin);
+            showNotification('Link not opened: not a well formed NomadNet address', 'warning', 5000);
+            return;
+        }
         // Wait for the first tab to be created and ready
         setTimeout(() => {
             const tab = getActiveTab();
@@ -9324,9 +9374,10 @@ function showSettings(category) {
 
         <div class="auto-reload-setting" data-cat="system" id="settings-links-section">
             <label class="settings-label">Links</label>
-            <div class="settings-hint"><code>nomadnetwork://</code> and <code>rbrowser://</code> links in web pages
-                and other programs open in rBrowser, which starts if it is not running. Set on the computer
-                rBrowser runs on. Applies immediately.</div>
+            <div class="settings-hint"><code>nomadnetwork://</code>, <code>rrc://</code> and <code>rbrowser://</code>
+                links in web pages (rmap.world's "Open in rBrowser2") and other programs open in rBrowser, which
+                starts if it is not running. On by default, for the links no other program opens. Set on the
+                computer rBrowser runs on. Applies immediately.</div>
             <div class="settings-row">
                 <span>Open links in rBrowser</span>
                 <div class="toggle-switch" id="setting-links" onclick="toggleLinks(this)"><div class="toggle-slider"></div></div>
@@ -9973,7 +10024,7 @@ function showSettings(category) {
 
         <div class="auto-reload-setting" data-cat="about">
             <label class="settings-label">About</label>
-            <div class="settings-about" id="settings-version" onclick="aboutVersionTap()">rBrowser v2.0.0b</div>
+            <div class="settings-about" id="settings-version" onclick="aboutVersionTap()">rBrowser v2.0.1b</div>
             <div class="settings-hint">Beta: some parts of the interface may still have bugs; they are fixed as soon as possible.</div>
             <div class="settings-hint" id="settings-usage" title="rBrowser's Python process; page = this browser tab (Chrome/Edge only)"></div>
             <div class="settings-hint">Standalone Reticulum Browser: NomadNet, LXMF, RRC, BBS &amp; RMAP WebUI Clients</div>
@@ -10132,10 +10183,15 @@ function renderLinkSettings(st) {
     if (!toggle || !note) return;
     toggle.classList.toggle('active', !!st.registered);
     toggle.classList.toggle('disabled', !st.supported);
+    const schemes = st.schemes || {};
+    const list = state => Object.keys(schemes).filter(s => schemes[s] === state).map(s => `<code>${s}://</code>`).join(', ');
     if (!st.supported) {
         note.textContent = `Not available: ${st.reason}.`;
     } else if (st.registered) {
-        note.textContent = 'Links open here.';
+        // Some may be another program's: the start never takes those.
+        note.innerHTML = `Open here: ${list('ours')}.`
+            + (list('copy') ? ` Another rBrowser folder opens ${list('copy')}: restart this one to take them.` : '')
+            + (list('other') ? ` Another program opens ${list('other')}: turn this off and on to take them too.` : '');
     } else if (st.other) {
         note.innerHTML = `Another program opens them now: <code>${escapeHtml(st.other)}</code>. Turning this on replaces it.`;
     } else {
@@ -10163,7 +10219,7 @@ async function toggleLinks(toggle) {
         }).then(r => r.json());
         if (st.status === 'error') throw new Error(st.error);
         renderLinkSettings(st);
-        showNotification(enabled ? 'nomadnetwork:// links now open in rBrowser'
+        showNotification(enabled ? 'nomadnetwork://, rrc:// and rbrowser:// links now open in rBrowser'
                                  : 'Links no longer open in rBrowser', 'success', 3000);
     } catch (e) {
         showNotification(`Links: ${escapeHtml(e.message)}`, 'error', 5000);
@@ -10576,6 +10632,17 @@ async function checkForUpdates(force = false) {
     return updateInfo;
 }
 
+// What is new (CHANGELOG.md on GitHub, rbrowser/updates.py changelog_news):
+// text from the internet, so escaped, `code` kept as code and nothing else.
+function updateNewsHtml(info) {
+    const news = Array.isArray(info && info.news) ? info.news : [];
+    if (!news.length) return '';
+    const text = s => escapeHtml(String(s || '')).replace(/`([^`]+)`/g, '<code>$1</code>');
+    return `<div class="update-news">${news.map(s => `
+        <div class="update-news-version">v${escapeHtml(String(s.version || ''))}${s.title ? ` <span>${escapeHtml(String(s.title))}</span>` : ''}</div>
+        <ul>${(Array.isArray(s.items) ? s.items : []).map(i => `<li>${text(i)}</li>`).join('')}</ul>`).join('')}</div>`;
+}
+
 function renderUpdateInfo() {
     const info = updateInfo || {};
     const nav = document.querySelector('.settings-nav-item[data-cat="about"]');
@@ -10588,7 +10655,7 @@ function renderUpdateInfo() {
         box.hidden = false;
         box.innerHTML = `<b>rBrowser v${escapeHtml(info.remote)} is out</b> (you have v${escapeHtml(info.local)}).<br>
             <a href="${escapeHtml(info.repo)}" target="_blank" rel="noopener noreferrer">${escapeHtml(info.repo)}</a><br>
-            In the rBrowser folder: <code>${escapeHtml(info.command)}</code>, then restart rBrowser.`;
+            In the rBrowser folder: <code>${escapeHtml(info.command)}</code>, then restart rBrowser.${updateNewsHtml(info)}`;
     } else if (info.checked) {
         box.hidden = false;
         box.textContent = info.status === 'success' ? `Up to date (v${info.local}).` : (info.error || 'Check failed');
@@ -10649,8 +10716,8 @@ function showUpdatePopup(info) {
     overlay.className = 'auto-reload-modal';
     overlay.innerHTML = `<div class="auto-reload-dialog msg-warn-dialog">
         <div class="dialog-header"><h3>rBrowser v${escapeHtml(info.remote)} is out</h3></div>
-        <div class="settings-hint">You have v${escapeHtml(info.local)}. What is new, and how to update, on the GitHub page.
-            In the rBrowser folder: <code>${escapeHtml(info.command)}</code>, then restart rBrowser.</div>
+        <div class="settings-hint">You have v${escapeHtml(info.local)}. In the rBrowser folder:
+            <code>${escapeHtml(info.command)}</code>, then restart rBrowser.${updateNewsHtml(info)}</div>
         <div class="auto-reload-actions">
             <button class="btn-cancel">Later</button>
             <a class="btn-save" href="${escapeHtml(info.repo)}" target="_blank" rel="noopener noreferrer">Open GitHub</a>
@@ -10667,7 +10734,7 @@ function showUpdatePopup(info) {
 
 // rBrowser's version on the empty pages of the clients (version.txt, via
 // /api/version): "rBrowser v2.0.0" and the client's name under it, as its title.
-let RB_VERSION = '2.0.0b';
+let RB_VERSION = '2.0.1b';
 
 function clientWelcome(icon, name) {
     return `<div class="client-welcome"><h2 class="rb-version">rBrowser v${RB_VERSION}</h2>
@@ -12167,7 +12234,17 @@ function statusUrl() {
 
 function openDeliveredLinks(urls) {
     if (!Array.isArray(urls) || !urls.length) return;
-    for (const url of urls) openQuickAddress(normalizeNomadNetUrl(String(url)), null, true);
+    for (const url of urls) {
+        // A client's link (links.py link_target) comes as JSON, a page as its address.
+        const text = String(url);
+        if (text.startsWith('{')) {
+            let t = null;
+            try { t = externalLinkTarget(JSON.parse(text)); } catch (e) {}
+            if (t) openLinkTarget(t);
+        } else {
+            openQuickAddress(normalizeNomadNetUrl(text), null, true);
+        }
+    }
     try { window.focus(); } catch (e) {}
     flagPageTitle();
 }

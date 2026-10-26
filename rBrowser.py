@@ -25,7 +25,7 @@ from typing import Tuple
 sys.argv[0] = os.path.abspath(sys.argv[0])
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-# A nomadnetwork:// or rbrowser:// link clicked somewhere (rbrowser/links.py):
+# A nomadnetwork://, rrc:// or rbrowser:// link clicked somewhere (rbrowser/links.py):
 # hand it to the rBrowser that is running, or start one, and stop here. Done
 # before anything below, which sets up a whole rBrowser - and before the
 # console setup, which from pythonw would flash a window on every click.
@@ -157,10 +157,10 @@ def main() -> int:
                         help="Terminal log for this run: 'full' (everything) or 'status' "
                              "(connection, identity and errors). Default: the choice in Settings")
     parser.add_argument("--open", metavar="LINK", default=None,
-                        help="Open a nomadnetwork:// or rbrowser:// link in the running rBrowser "
+                        help="Open a nomadnetwork://, rrc:// or rbrowser:// link in the running rBrowser "
                              "(started if needed). Used by the system when links are registered")
     parser.add_argument("--register-links", action="store_true",
-                        help="Make nomadnetwork:// and rbrowser:// links open in rBrowser, then exit")
+                        help="Make nomadnetwork://, rrc:// and rbrowser:// links open in rBrowser, then exit")
     parser.add_argument("--unregister-links", action="store_true",
                         help="Stop opening those links in rBrowser, then exit")
     args = parser.parse_args()
@@ -175,6 +175,8 @@ def main() -> int:
         return 0
     if args.log:
         console_log.console.override = args.log
+    # Links on by default (Settings > System > Links turns them off).
+    links.auto_register()
     listen = browser.server_settings.resolve(args.host, args.port)
     args.host, args.port = listen["host"], listen["port"]
 

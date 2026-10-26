@@ -19,7 +19,7 @@ A modern, web-based UI for exploring NomadNet nodes and pages over the Reticulum
 
 
 
-> **Beta - v2.0.0b.** rBrowser 2 is published as a beta: everything works, but
+> **Beta - v2.0.1b.** rBrowser 2 is published as a beta: everything works, but
 > some parts of the interface may still have bugs. They are fixed as soon as
 > possible. To hear about updates, switch on *Settings > About > Check for
 > updates at start* (a window tells you when a new version is out, with the
@@ -128,12 +128,18 @@ you start rBrowser by hand.
 rBrowser listens on the network (`0.0.0.0`). Anyone on that network can open
 it: turn on the access password (Settings > System) to keep them out.
 
-**Links from anywhere.** Settings > System > Links: `nomadnetwork://` and
-`rbrowser://` links on web pages and in other programs open in rBrowser,
-which starts if it is not running. With rBrowser already open on that
-computer, the link opens as a new tab in that page and its browser window
-comes forward (when rBrowser is not the tab on screen, its tab title blinks).
-Windows and Linux; from the terminal, `--register-links` / `--unregister-links`.
+**Links from anywhere.** `nomadnetwork://`, `rrc://` and `rbrowser://` links
+on web pages (rmap.world's "Open in rBrowser2") and in other programs open in
+rBrowser, which starts if it is not running. On by default for the links no
+other program opens; Settings > System > Links turns them off. A link holds
+NomadNet's own syntax: `<hash>:/page/...` opens the page, `lxmf@<hash>` the
+messenger, `rrc://<hub>/<room>` the chat, `retibbs.bbs@<hash>` the BBS
+client, `lxmf.propagation@<hash>` offers it as your propagation node. Only
+well formed links open; joining a hub or a BBS from a link is asked first.
+With rBrowser already open on that computer, the link opens in that page and
+its browser window comes forward (when rBrowser is not the tab on screen, its
+tab title blinks). Windows and Linux with a desktop; from the terminal,
+`--register-links` / `--unregister-links`.
 
 **Settings.** Grouped in categories (Identity, Pages, NomadNet Browser,
 LXMF Messenger, RRC Client, BBS Client, RMAP, System, Advanced, About) with a search box over all of them; one Save
@@ -794,7 +800,8 @@ computes whatever the recipient asks.
 
 **Check for updates.** Settings > About: "Check for updates at start" (on by
 default) reads version.txt on github.com/fr33n0w/rBrowser2; a newer version puts
-a green dot on About, with the link and the command (`git pull`). "Check now"
+a green dot on About, with the link, the command (`git pull`) and what is new
+(the entries of [CHANGELOG.md](CHANGELOG.md) after your version). "Check now"
 asks at once. Nothing is downloaded or run by rBrowser. About also says how to
 update for each kind of install (git, zip, Docker).
 
