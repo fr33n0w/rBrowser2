@@ -84,9 +84,11 @@ def changelog_news(text: str, mine: str, remote: str) -> List[Dict[str, Any]]:
 
 def check(force: bool = False) -> Dict[str, Any]:
     now = time.time()
-    if not force and _last and now - _last.get("at", 0) < CACHE_S:
-        return dict(_last)
     mine = local_version()
+    # A git pull changes version.txt under a running rBrowser: the cache
+    # only holds while the local version is the same.
+    if not force and _last and now - _last.get("at", 0) < CACHE_S and _last.get("local") == mine:
+        return dict(_last)
     out: Dict[str, Any] = {"status": "success", "local": mine, "remote": "", "update": False,
                            "repo": REPO_URL, "command": UPDATE_COMMAND, "at": now}
     try:
