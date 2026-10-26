@@ -10227,6 +10227,10 @@ body.sidebar-collapsed .sidebar-toggle-btn {
     background: #1f6feb;
 }
 
+.tab-messages-badge.rrc-badge-join {
+    background: #238636;
+}
+
 /* Room tabs: the hub window first, then its rooms. */
 .rrc-tab-hub .msg-tab-name {
     font-weight: 600;
@@ -11937,6 +11941,13 @@ body.app-window .content {
     background: #f8514926;
     border-color: #f8514980;
     color: #ff7b72;
+}
+
+/* Someone joined: green, a person and +N. */
+.rrc-new-badge.rrc-new-join {
+    background: #2ea04326;
+    border-color: #2ea04366;
+    color: #3fb950;
 }
 
 /* One line until Shift+Enter: no scroll arrows, a long placeholder cut. */

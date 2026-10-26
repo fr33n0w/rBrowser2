@@ -261,6 +261,7 @@ class Room:
         self.outbox: List[Any] = []           # (kind, text) typed before the hub's JOINED
         self.unread = 0
         self.mentions = 0
+        self.joins = 0                        # others joined since you last looked
 
     def learn(self, ident: str) -> None:
         """A full hash seen in the room: it takes the place of its /who prefix."""
@@ -1413,8 +1414,8 @@ class RRC:
             with self.lock:
                 hub.active = clean_room(room) if room else STATUS
                 r = hub.rooms.get(hub.active)
-                if r is not None and (r.unread or r.mentions):
-                    r.unread = r.mentions = 0
+                if r is not None and (r.unread or r.mentions or r.joins):
+                    r.unread = r.mentions = r.joins = 0
                     hub.rev += 1
         return {"status": "success"}
 
@@ -1859,6 +1860,11 @@ class RRC:
             if self.settings["show_joins"]:
                 who = nick or (hub.name_of(hashes[0]) if len(hashes) == 1 else "someone")
                 self._line(hub, room, "join", f"{who} joined #{room}", who, hashes[0] if len(hashes) == 1 else hub.ident_of(who))
+                # Its own badge on the room: the join sound otherwise left
+                # nothing to tell which of many rooms it came from.
+                with self.lock:
+                    r.joins += 1
+                    hub.rev += 1
 
     def _quiet_who(self, hub: Hub, room: str) -> None:
         """Hubs with include_joined_member_list off say who joined or left
@@ -2111,7 +2117,7 @@ class RRC:
         members += [{"id": p, "nick": n, "role": self._role(r, p), "partial": True} for p, n in r.prefixes.items()
                     if not any(h.startswith(p) for h in r.members)]
         return {"name": r.name, "joined": r.joined, "leaving": r.name in hub.pending_parts, "topic": r.topic, "modes": r.modes,
-                "unread": r.unread, "mentions": r.mentions, "members": members}
+                "unread": r.unread, "mentions": r.mentions, "joins": r.joins, "members": members}
 
     def output(self, address: Any, since: Any = 0) -> Dict[str, Any]:
         hub = self.sessions.get(clean_address(address) or "")
@@ -2212,7 +2218,8 @@ class RRC:
                      # The rooms only, not the hub tab (its automatic answers
                      # would keep the browser's RRC tab badge lit for nothing).
                      "room_unread": sum(r.unread for r in h.rooms.values() if r.name != STATUS),
-                     "mentions": sum(r.mentions for r in h.rooms.values())}
+                     "mentions": sum(r.mentions for r in h.rooms.values()),
+                     "room_joins": sum(r.joins for r in h.rooms.values() if r.name != STATUS)}
                     for h in self.sessions.values()]
             settings = {k: v for k, v in self.settings.items() if k not in ("favorites", "history", "hubs")}
         return {"status": "success", "settings": settings, "identities": self.identity_choices(),

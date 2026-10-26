@@ -547,7 +547,7 @@ function openRrc() {
 function rrcNextNews() {
     const here = Rrc.active ? rrcKey(Rrc.active.hub, Rrc.active.room) : '';
     const wins = rrcWindows().filter(w => rrcKey(w.hub, w.room) !== here && w.room);
-    return wins.find(w => w.r.mentions) || wins.find(w => w.r.unread) || null;
+    return wins.find(w => w.r.mentions) || wins.find(w => w.r.unread) || wins.find(w => w.r.joins) || null;
 }
 
 function closeRrc() {
@@ -574,9 +574,13 @@ function applyRrcVisibility() {
         const mentions = hubs.reduce((n, h) => n + (h.mentions || 0), 0);
         // Only the rooms' new messages: the hub tab keeps its own count.
         const unread = hubs.reduce((n, h) => n + (h.room_unread ?? h.unread ?? 0), 0);
-        badge.hidden = !(mentions || unread);
-        badge.textContent = mentions ? `@${mentions}` : String(unread);
-        badge.classList.toggle('rrc-badge-quiet', !mentions);
+        // Only joins: a green +N, so a join sound has something to point at.
+        const joins = hubs.reduce((n, h) => n + (h.room_joins || 0), 0);
+        badge.hidden = !(mentions || unread || joins);
+        badge.textContent = mentions ? `@${mentions}` : unread ? String(unread) : `+${joins}`;
+        badge.title = mentions || unread ? '' : `${joins} joined your rooms`;
+        badge.classList.toggle('rrc-badge-quiet', !mentions && !!unread);
+        badge.classList.toggle('rrc-badge-join', !mentions && !unread && !!joins);
     }
     // The dot: connected to at least one hub (green), connecting (yellow),
     // failed and trying again (red), not connected anywhere (grey).
@@ -768,8 +772,8 @@ function rrcEventLine(address, line) {
 function rrcReadInFront() {
     if (!Rrc.active || !Rrc.open || document.hidden) return;
     const r = rrcRoomOf(Rrc.active.hub, Rrc.active.room);
-    if (r && (r.unread || r.mentions)) {
-        r.unread = r.mentions = 0;
+    if (r && (r.unread || r.mentions || r.joins)) {
+        r.unread = r.mentions = r.joins = 0;
         rrcPost(`/api/rrc/read/${Rrc.active.hub}`, { room: Rrc.active.room });
     }
 }
@@ -1065,14 +1069,18 @@ function renderRrcAll() {
 }
 
 function rrcBadge(r) {
-    if (!r || !(r.unread || r.mentions)) return '';
+    if (!r || !(r.unread || r.mentions || r.joins)) return '';
     // The hub window: /who, /list and the like grow its count for nothing,
     // a blue dot says enough.
-    if (!r.name && !r.mentions) return '<span class="rrc-hub-dot" title="Something new in the hub window"></span>';
-    // New messages: orange, a balloon and how many; mentions: red, @N.
-    return r.mentions
+    if (!r.name && !r.mentions) return r.unread ? '<span class="rrc-hub-dot" title="Something new in the hub window"></span>' : '';
+    // New messages: orange, a balloon and how many; mentions: red, @N;
+    // people who came in: green, a person and +N (the join sound's trace).
+    const msgs = r.mentions
         ? `<span class="rrc-new-badge rrc-new-at" title="${r.mentions} new ${r.mentions === 1 ? 'mention' : 'mentions'}">@${r.mentions}</span>`
-        : `<span class="rrc-new-badge" title="${r.unread} new ${r.unread === 1 ? 'message' : 'messages'}">${RRC_MSG_ICON}${r.unread}</span>`;
+        : r.unread ? `<span class="rrc-new-badge" title="${r.unread} new ${r.unread === 1 ? 'message' : 'messages'}">${RRC_MSG_ICON}${r.unread}</span>` : '';
+    const joins = r.joins
+        ? `<span class="rrc-new-badge rrc-new-join" title="${r.joins} ${r.joins === 1 ? 'person' : 'people'} joined">${RRC_USER_ICON}+${r.joins}</span>` : '';
+    return msgs + joins;
 }
 
 function rrcWindows() {

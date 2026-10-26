@@ -10024,7 +10024,7 @@ function showSettings(category) {
 
         <div class="auto-reload-setting" data-cat="about">
             <label class="settings-label">About</label>
-            <div class="settings-about" id="settings-version" onclick="aboutVersionTap()">rBrowser v2.0.1b</div>
+            <div class="settings-about" id="settings-version" onclick="aboutVersionTap()">rBrowser v2.0.2b</div>
             <div class="settings-hint">Beta: some parts of the interface may still have bugs; they are fixed as soon as possible.</div>
             <div class="settings-hint" id="settings-usage" title="rBrowser's Python process; page = this browser tab (Chrome/Edge only)"></div>
             <div class="settings-hint">Standalone Reticulum Browser: NomadNet, LXMF, RRC, BBS &amp; RMAP WebUI Clients</div>
@@ -10734,7 +10734,7 @@ function showUpdatePopup(info) {
 
 // rBrowser's version on the empty pages of the clients (version.txt, via
 // /api/version): "rBrowser v2.0.0" and the client's name under it, as its title.
-let RB_VERSION = '2.0.1b';
+let RB_VERSION = '2.0.2b';
 
 function clientWelcome(icon, name) {
     return `<div class="client-welcome"><h2 class="rb-version">rBrowser v${RB_VERSION}</h2>

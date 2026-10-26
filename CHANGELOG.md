@@ -3,6 +3,10 @@
 What changes in each version. rBrowser reads this file from GitHub when an
 update is out, and shows the new entries in Settings > About.
 
+## 2.0.2b - 2026-10-26
+
+- RRC: green badge for new joins on rooms and tabs.
+
 ## 2.0.1b - 2026-10-26
 
 - Links from rmap.world: "Open in rBrowser2" on the map, the node list and the services page opens NomadNet pages, RRC hubs and rooms, propagation nodes and RetiBBS straight in rBrowser.
