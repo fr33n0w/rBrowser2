@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import ipaddress
+import json
 import mimetypes
 import os
 import re
@@ -36,6 +37,16 @@ HASH_KIND_WAIT = 30
 
 # settings/ui_prefs.json: read, changed and written by one request at a time.
 _UI_PREFS_LOCK = threading.Lock()
+_UI_PREFS_PATH = os.path.join("settings", "ui_prefs.json")
+
+
+def _read_ui_prefs() -> dict:
+    try:
+        with open(_UI_PREFS_PATH, encoding="utf-8") as fh:
+            prefs = json.load(fh)
+        return prefs if isinstance(prefs, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 # /api/usage: this process, kept between calls (cpu_percent measures since
 # the call before).
@@ -212,6 +223,19 @@ def register_routes(app, browser) -> None:
         session.clear()
         return redirect("/login")
 
+    def render_index():
+        # Who this session is and the page's preferences, written into the
+        # page: rbrowser.js reads them before the page builds itself (they
+        # were two synchronous requests, deprecated in the browsers). Same
+        # fields as GET /api/auth and GET /api/ui-prefs.
+        page_auth = {}
+        if auth is not None:
+            page_auth = {"role": auth.role(session, request.remote_addr),
+                         "guest": auth.status(request.remote_addr)["guest"]}
+        with _UI_PREFS_LOCK:
+            ui_prefs = _read_ui_prefs()
+        return render_template("index.html", page_auth=page_auth, ui_prefs=ui_prefs)
+
     @app.route("/api/auth", methods=["GET", "POST"])
     def api_auth():
         if auth is None:
@@ -242,7 +266,7 @@ def register_routes(app, browser) -> None:
 
     @app.route("/")
     def index():
-        response = app.make_response(render_template("index.html"))
+        response = app.make_response(render_index())
         # The app shell must never be cached. It carries no cache headers of
         # its own, so a browser is free to apply heuristic caching and keep
         # serving the previous version's page after an update - which looks
@@ -868,18 +892,9 @@ def register_routes(app, browser) -> None:
         in settings/ui_prefs.json, so every browser, port and phone of this
         rBrowser sees the same ones. POST
         merges {key: value}; a null value removes the key."""
-        import json as _json
-        import os as _os
         from .fileio import atomic_write_json
-        path = _os.path.join("settings", "ui_prefs.json")
         with _UI_PREFS_LOCK:
-            try:
-                with open(path, encoding="utf-8") as fh:
-                    prefs = _json.load(fh)
-                if not isinstance(prefs, dict):
-                    prefs = {}
-            except (OSError, ValueError):
-                prefs = {}
+            prefs = _read_ui_prefs()
             if request.method == "POST":
                 payload = request.get_json(silent=True)
                 if not isinstance(payload, dict):
@@ -892,7 +907,7 @@ def register_routes(app, browser) -> None:
                         prefs.pop(key, None)
                     elif len(prefs) < 200 or key in prefs:
                         prefs[key] = str(value)[:4000]
-                atomic_write_json(path, prefs, indent=1)
+                atomic_write_json(_UI_PREFS_PATH, prefs, indent=1)
         return jsonify({"status": "success", "prefs": prefs})
 
     @app.route("/api/sounds", methods=["GET", "POST"])
@@ -1903,8 +1918,8 @@ def register_routes(app, browser) -> None:
         # Check if path starts with a 32-character hex hash
         if re.match(r'^[a-fA-F0-9]{32}', path):
             # Serve the main index.html for hash-based URLs
-            return render_template('index.html')
-        
+            return render_index()
+
         # For other paths, return 404
         abort(404)
 

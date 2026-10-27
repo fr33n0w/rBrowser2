@@ -296,6 +296,8 @@
     <!-- Load local DOMPurify js for html security -->
     <script src="/script/purify.min.js"></script>
 
+    <script id="rb-auth" type="application/json">{{ page_auth|tojson }}</script>
+    <script id="rb-ui-prefs" type="application/json">{{ ui_prefs|tojson }}</script>
     <script src="/script/rbrowser.js"></script>
     <script src="/script/messenger.js"></script>
     <script src="/script/retibbs.js"></script>

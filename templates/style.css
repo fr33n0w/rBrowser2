@@ -2157,7 +2157,12 @@ html.mobile-device .tab-bar .tab.tab-gear { display: none !important; }
     margin-top: 20px;
 }
 
-.auto-reload-actions button {
+.auto-reload-actions button,
+.auto-reload-actions a {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+    line-height: normal;
     padding: 8px 16px;
     border: none;
     border-radius: 4px;

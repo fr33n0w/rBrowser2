@@ -44,10 +44,8 @@
 window.rbGuest = null;
 (function readRole() {
     try {
-        const xhr = new XMLHttpRequest();
-        xhr.open('GET', '/api/auth', false);       // before the page builds itself, a few ms
-        xhr.send();
-        const st = JSON.parse(xhr.responseText || '{}');
+        // Written into the page by the server (routes.py render_index).
+        const st = JSON.parse(document.getElementById('rb-auth').textContent || '{}');
         if (st.role === 'guest') window.rbGuest = st.guest || {};
     } catch (e) {}
     if (!window.rbGuest) return;
@@ -69,8 +67,8 @@ window.rbGuest = null;
 // The page's preferences live on the server, in settings/ui_prefs.json, not
 // only in this browser: localStorage is per browser and per address, so a
 // phone, Firefox or another port each had their own settings.
-// Read once, before anything else reads localStorage (a
-// synchronous request to our own server, a few ms); every later change of
+// Read once, before anything else reads localStorage (written into the
+// page by the server, routes.py render_index); every later change of
 // one of these keys is written to the file at once. Kept local: what
 // belongs to this screen (sidebar width, page zoom, open windows).
 (function syncPrefsWithServer() {
@@ -81,11 +79,9 @@ window.rbGuest = null;
     if (!store) return;
     let fromServer = null;
     try {
-        const xhr = new XMLHttpRequest();
-        xhr.open('GET', '/api/ui-prefs', false);
-        xhr.send();
-        if (xhr.status === 200) fromServer = (JSON.parse(xhr.responseText) || {}).prefs || null;
-    } catch (e) { /* the server answers later: this browser's own values for now */ }
+        const prefs = JSON.parse(document.getElementById('rb-ui-prefs').textContent);
+        if (prefs && typeof prefs === 'object') fromServer = prefs;
+    } catch (e) { /* not in the page: this browser's own values for now */ }
     const setItem = Storage.prototype.setItem;
     const removeItem = Storage.prototype.removeItem;
     let pending = {};
@@ -10033,6 +10029,15 @@ function showSettings(category) {
                 <div class="toggle-switch" id="setting-update-check"><div class="toggle-slider"></div></div>
             </div>
             <div class="settings-row">
+                <span title="While the page stays open, it asks again for a newer version every so often (GitHub is asked at most every 10 minutes)">Auto-check every</span>
+                <div class="settings-inline">
+                    <select id="setting-update-every" class="settings-select" title="How often">
+                        ${UPDATE_EVERY_CHOICES.map(h => `<option value="${h}"${h === updateEveryHours() ? ' selected' : ''}>${h} hour${h > 1 ? 's' : ''}</option>`).join('')}
+                    </select>
+                    <div class="toggle-switch ${updateAutoOn() ? 'active' : ''}" id="setting-update-auto"><div class="toggle-slider"></div></div>
+                </div>
+            </div>
+            <div class="settings-row">
                 <span title="When the check finds a newer version: a window says so, with the link to the GitHub page">Tell me in a window when an update is out</span>
                 <div class="toggle-switch" id="setting-update-popup"><div class="toggle-slider"></div></div>
             </div>
@@ -10687,6 +10692,18 @@ function setupUpdateSettings() {
             try { localStorage.setItem('rbrowser_update_popup', on ? '1' : '0'); } catch (e) {}
         });
     }
+    const auto = document.getElementById('setting-update-auto');
+    if (auto) auto.addEventListener('click', () => {
+        const on = !auto.classList.contains('active');
+        auto.classList.toggle('active', on);
+        try { localStorage.setItem('rbrowser_update_auto', on ? '1' : '0'); } catch (e) {}
+        scheduleUpdateAutoCheck();
+    });
+    const every = document.getElementById('setting-update-every');
+    if (every) every.addEventListener('change', () => {
+        try { localStorage.setItem('rbrowser_update_every', every.value); } catch (e) {}
+        scheduleUpdateAutoCheck();
+    });
     const now = document.getElementById('setting-update-now');
     if (now) now.onclick = async () => {
         now.disabled = true;
@@ -10701,11 +10718,36 @@ function setupUpdateSettings() {
     else renderUpdateInfo();
 }
 
+async function autoCheckForUpdates() {
+    const info = await checkForUpdates(false);
+    if (info && info.update && updatePopupOn()) showUpdatePopup(info);
+}
+
+// Settings > About > "Auto-check every": a page left open for days still
+// hears about a new version. On unless switched off, every 6 hours.
+const UPDATE_EVERY_CHOICES = [1, 2, 3, 4, 6, 8, 12];
+let updateAutoTimer = null;
+
+function updateAutoOn() {
+    try { return localStorage.getItem('rbrowser_update_auto') !== '0'; } catch (e) { return true; }
+}
+
+function updateEveryHours() {
+    let h = 6;
+    try { h = parseInt(localStorage.getItem('rbrowser_update_every'), 10) || 6; } catch (e) {}
+    return UPDATE_EVERY_CHOICES.includes(h) ? h : 6;
+}
+
+function scheduleUpdateAutoCheck() {
+    clearInterval(updateAutoTimer);
+    updateAutoTimer = null;
+    if (APP_WINDOW || !updateAutoOn()) return;
+    updateAutoTimer = setInterval(autoCheckForUpdates, updateEveryHours() * 3600000);
+}
+
 window.addEventListener('load', () => {
-    if (!APP_WINDOW && updateCheckOn()) setTimeout(async () => {
-        const info = await checkForUpdates(false);
-        if (info && info.update && updatePopupOn()) showUpdatePopup(info);
-    }, 5000);
+    if (!APP_WINDOW && updateCheckOn()) setTimeout(autoCheckForUpdates, 5000);
+    scheduleUpdateAutoCheck();
 });
 
 // Settings > About > "Tell me in a window": on unless switched off.
@@ -10716,8 +10758,9 @@ function updatePopupOn() {
 // Once per new version: closing it is enough until the next one.
 function showUpdatePopup(info) {
     try { if (localStorage.getItem('rbrowser_update_told') === info.remote) return; } catch (e) {}
+    if (document.querySelector('.update-popup')) return;   // still open from the last check
     const overlay = document.createElement('div');
-    overlay.className = 'auto-reload-modal';
+    overlay.className = 'auto-reload-modal update-popup';
     overlay.innerHTML = `<div class="auto-reload-dialog msg-warn-dialog">
         <div class="dialog-header"><h3>rBrowser v${escapeHtml(info.remote)} is out</h3></div>
         <div class="settings-hint">You have v${escapeHtml(info.local)}. In the rBrowser folder:
