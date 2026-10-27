@@ -41,6 +41,8 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, Optional
 
+from . import netwatch
+
 SETTINGS_FILE = os.path.join("settings", "remote.json")
 BIN_DIR = "bin"
 TUNNEL_URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
@@ -461,9 +463,11 @@ class Remote:
         return answer
 
     def _ddns_loop(self) -> None:
+        # Back from a network outage: the public IP has often changed.
+        netwatch.on_change(lambda online: online and self._ddns_wake.set())
         while not self._stop.is_set():
             self._ddns_wake.clear()
-            if self.settings["ddns_on"] and self._ddns_ready(self.settings):
+            if self.settings["ddns_on"] and self._ddns_ready(self.settings) and not netwatch.offline():
                 try:
                     ip = self._public_ip()
                     now = time.time()

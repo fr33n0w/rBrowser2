@@ -5025,7 +5025,20 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
                 });
         }
 
+        // rbrowser/netwatch.py: the internet went away or came back.
+        let lastNetStatus = null;
+        function noteInternetChange(status) {
+            if (status === 'connerror') return;   // rBrowser itself not answering: says nothing about the internet
+            if (status === 'offline' && lastNetStatus !== 'offline') {
+                showNotification('Disconnected from the network, waiting for reconnect...', 'warning', 6000);
+            } else if (lastNetStatus === 'offline' && status !== 'offline') {
+                showNotification('Network connected', 'success', 4000);
+            }
+            lastNetStatus = status;
+        }
+
         function updateConnectionStatus(status, message, color) {
+            noteInternetChange(status);
             const state = { green: 'connected', yellow: 'connecting', red: 'failed' }[color] || 'closed';
             if (state !== nomadNetState) {
                 nomadNetState = state;
@@ -9252,6 +9265,23 @@ function showSettings(category) {
         </div>
 
         <div class="auto-reload-setting" data-cat="system">
+            <label class="settings-label">Internet check</label>
+            <div class="settings-hint">Reticulum notices a dead line late. When on, rBrowser opens a connection
+                to these hosts every 15 seconds (nothing is sent) and says in the terminal, in the status bar and
+                in a notification when the internet goes away and comes back. Off: nothing is contacted.
+                Applies on Save.</div>
+            <div class="settings-row">
+                <span title="Off by default">Check the internet connection</span>
+                <div class="toggle-switch" id="setting-netwatch-on"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row">
+                <span title="host:port, separated by commas; one answering is enough. Any host you trust: your own server, a DNS resolver...">Hosts</span>
+                <input type="text" id="setting-netwatch-hosts" class="settings-input" spellcheck="false"
+                       aria-label="Hosts for the internet check" placeholder="1.1.1.1:443, 9.9.9.9:443">
+            </div>
+        </div>
+
+        <div class="auto-reload-setting" data-cat="system">
             <label class="settings-label">Access password</label>
             <div class="settings-hint">rBrowser listens on your network, so a phone can use it: anyone on the same
                 network can open it too, read your messages and use your identities. On a network that is not
@@ -10020,7 +10050,7 @@ function showSettings(category) {
 
         <div class="auto-reload-setting" data-cat="about">
             <label class="settings-label">About</label>
-            <div class="settings-about" id="settings-version" onclick="aboutVersionTap()">rBrowser v2.0.3b</div>
+            <div class="settings-about" id="settings-version" onclick="aboutVersionTap()">rBrowser v2.0.4b</div>
             <div class="settings-hint">Beta: some parts of the interface may still have bugs; they are fixed as soon as possible.</div>
             <div class="settings-hint" id="settings-usage" title="rBrowser's Python process; page = this browser tab (Chrome/Edge only)"></div>
             <div class="settings-hint">Standalone Reticulum Browser: NomadNet, LXMF, RRC, BBS &amp; RMAP WebUI Clients</div>
@@ -10120,6 +10150,15 @@ function showSettings(category) {
         });
         vol.addEventListener('change', saveSoundSettingsFromDialog);
     }
+    fetch('/api/netwatch').then(r => r.json()).then(s => {
+        const on = document.getElementById('setting-netwatch-on');
+        const hosts = document.getElementById('setting-netwatch-hosts');
+        if (!on || !hosts || s.status !== 'success') return;
+        on.classList.toggle('active', !!s.enabled);
+        on.onclick = () => on.classList.toggle('active');
+        hosts.value = s.hosts || s.default_hosts || '';
+        on.dataset.loaded = JSON.stringify(readNetwatchChoice());
+    }).catch(() => {});
     fetch('/api/console-settings').then(r => r.json()).then(s => {
         const box = document.getElementById('setting-terminal-log');
         if (!box || !s.categories) return;
@@ -10751,6 +10790,13 @@ window.addEventListener('load', () => {
 });
 
 // Settings > About > "Tell me in a window": on unless switched off.
+// Settings > System > Internet check, as the dialog has it now.
+function readNetwatchChoice() {
+    const on = document.getElementById('setting-netwatch-on');
+    const hosts = document.getElementById('setting-netwatch-hosts');
+    return { enabled: !!(on && on.classList.contains('active')), hosts: hosts ? hosts.value.trim() : '' };
+}
+
 function updatePopupOn() {
     try { return localStorage.getItem('rbrowser_update_popup') !== '0'; } catch (e) { return true; }
 }
@@ -10875,7 +10921,7 @@ async function runSelfUpdate(restart) {
 
 // rBrowser's version on the empty pages of the clients (version.txt, via
 // /api/version): "rBrowser v2.0.0" and the client's name under it, as its title.
-let RB_VERSION = '2.0.3b';
+let RB_VERSION = '2.0.4b';
 
 function clientWelcome(icon, name) {
     return `<div class="client-welcome"><h2 class="rb-version">rBrowser v${RB_VERSION}</h2>
@@ -12023,6 +12069,26 @@ function saveSettings({ close = false } = {}) {
         try { localStorage.setItem(NOTIFICATIONS_KEY, notifications.value); } catch (e) {}
     }
     saveSoundSettingsFromDialog();
+
+    // Internet check (rbrowser/netwatch.py): only sent when it changed.
+    const netwatchOn = document.getElementById('setting-netwatch-on');
+    if (netwatchOn && netwatchOn.dataset.loaded) {
+        const choice = readNetwatchChoice();
+        if (JSON.stringify(choice) !== netwatchOn.dataset.loaded) {
+            fetch('/api/netwatch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(choice)
+            }).then(r => r.json()).then(res => {
+                if (res.status !== 'success') {
+                    showNotification(`Internet check not saved: ${escapeHtml(res.error || 'error')}`, 'error', 6000);
+                    return;
+                }
+                document.getElementById('setting-netwatch-hosts').value = res.hosts;
+                netwatchOn.dataset.loaded = JSON.stringify(readNetwatchChoice());
+            }).catch(err => showNotification(`Internet check not saved: ${escapeHtml(err.message)}`, 'error', 5000));
+        }
+    }
 
     // Server side, applies at once. Only sent when it changed, so opening
     // and saving the settings does not end a --log override by accident.

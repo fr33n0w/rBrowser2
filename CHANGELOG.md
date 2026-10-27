@@ -3,6 +3,14 @@
 What changes in each version. rBrowser reads this file from GitHub when an
 update is out, and shows the new entries in Settings > About.
 
+## 2.0.4b - 2026-10-27
+
+- Added Auto-check updates every N hours.
+- Fixed restart on Linux updates.
+- Fixed update button style. (cosmetic)
+- Fixed install.bat blocking git pull auto-updates.
+- Network disconnection log in terminal and webui.
+
 ## 2.0.3b - 2026-10-27
 
 - Added Auto-Update on new releases.

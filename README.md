@@ -19,7 +19,7 @@ A modern, web-based UI for exploring NomadNet nodes and pages over the Reticulum
 
 
 
-> **Beta - v2.0.3b.** rBrowser 2 is published as a beta: everything works, but
+> **Beta - v2.0.4b.** rBrowser 2 is published as a beta: everything works, but
 > some parts of the interface may still have bugs. They are fixed as soon as
 > possible. To hear about updates, switch on *Settings > About > Check for
 > updates at start* (a window tells you when a new version is out, with the
@@ -116,9 +116,19 @@ with. Switched on, rBrowser sends the fingerprint on its own, with that
 identity, when you open one of its pages - once per node per session. If a
 different identity is in use, it asks before switching.
 
+**Internet check.** Settings > System, off by default. Reticulum notices a
+dead line late, so when this is on rBrowser opens a connection to the hosts
+you choose every 15 seconds (nothing is sent) and says when the internet goes
+away and comes back: a line in the terminal, the status bar in red, a
+notification. While it is away, what uses the internet by itself waits
+instead of filling the log with errors (update check, RMAP download, Dynamic
+DNS) and goes on when it is back. NomadNet, LXMF and RRC go on as usual: they
+run over Reticulum, which may also have radio links. Off, nothing is contacted.
+
 **Web server settings.** `--host` and `--port` can also be set in Settings.
 A change needs a restart: rBrowser offers to do it, restarts itself and the
-page reconnects on its own. Options typed on the command line still win when
+page reconnects on its own. Started in a terminal, it stays in that terminal
+after the restart, and Ctrl+C still stops it. Options typed on the command line still win when
 you start rBrowser by hand.
 
 **Local network name.** In the same place, turn on a name like
@@ -802,8 +812,10 @@ computes whatever the recipient asks.
 default) reads version.txt on github.com/fr33n0w/rBrowser2; a newer version puts
 a green dot on About, with the link, the command (`git pull`) and what is new
 (the entries of [CHANGELOG.md](CHANGELOG.md) after your version). "Check now"
-asks at once. The check itself downloads nothing. About also says how to
-update for each kind of install (git, zip, Docker).
+asks at once. "Auto-check every" (on by default, 1 to 12 hours, 6 by
+default) asks again while the page stays open, so a tab left open for days
+still hears about a new version. The check itself downloads nothing. About
+also says how to update for each kind of install (git, zip, Docker).
 
 **Update now.** If rBrowser was installed with `git clone` and git is
 installed, About and the update window have an *Update now* button: it asks

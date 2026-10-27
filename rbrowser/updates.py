@@ -92,6 +92,10 @@ def check(force: bool = False) -> Dict[str, Any]:
         return dict(_last)
     out: Dict[str, Any] = {"status": "success", "local": mine, "remote": "", "update": False,
                            "repo": REPO_URL, "command": UPDATE_COMMAND, "at": now}
+    # Network down (netwatch.py): GitHub waits, and the last answer is kept.
+    from . import netwatch
+    if netwatch.offline():
+        return {**out, "status": "error", "error": "Offline: waiting for the network", "offline": True}
     try:
         req = urllib.request.Request(VERSION_URL, headers={"User-Agent": f"rBrowser/{mine}"})
         with urllib.request.urlopen(req, timeout=8) as r:

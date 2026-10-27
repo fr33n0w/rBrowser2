@@ -32,6 +32,8 @@ import time
 import urllib.request
 from typing import Any, Dict, List, Optional
 
+from . import netwatch
+
 SETTINGS_FILE = os.path.join("settings", "rmap.json")
 CACHE_FILE = os.path.join("cache", "rmap.json")
 SOURCE_URL = "https://rmap.world/?json"
@@ -232,6 +234,10 @@ class Rmap:
         with self.lock:
             if self.fetching:
                 return self.status()
+            if netwatch.offline():
+                # Network down: no fetch and no error line; the loop is woken
+                # when it is back.
+                return self.status()
             self.fetching = True
             self.revision += 1
         try:
@@ -266,6 +272,7 @@ class Rmap:
         return time.time() - self.fetched_at >= self.settings["refresh_minutes"] * 60
 
     def _loop(self) -> None:
+        netwatch.on_change(lambda online: online and self._wake.set())
         # Once at start, unless the cache is only minutes old (a restart).
         if self.settings["enabled"] and (self.fetched_at is None or time.time() - self.fetched_at >= LAUNCH_GAP):
             self.fetch()

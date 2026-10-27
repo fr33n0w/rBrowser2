@@ -275,6 +275,45 @@ def wait_for_previous_instance(timeout: float = 30.0) -> None:
     time.sleep(0.5)
 
 
+def _save_rns_state() -> None:
+    """Before a restart: links closed politely, path table and known
+    identities saved. Not RNS.Reticulum.exit_handler(): it detaches the
+    interfaces, and the reader thread of a client of a shared instance (rnsd
+    running) then calls RNS.exit() = os._exit(0) on its own. That raced the
+    restart: exec never came (Linux), or the exit code was 0 instead of 75
+    and systemd left rBrowser stopped. exec or exit close the sockets anyway."""
+    try:
+        import RNS
+    except Exception:
+        return
+    links = list(getattr(RNS.Transport, "active_links", [])) + list(getattr(RNS.Transport, "pending_links", []))
+    for link in links:
+        try:
+            link.teardown()
+        except Exception:
+            pass
+    if links:
+        time.sleep(0.15)   # the teardown packets leave, as RNS waits too
+    for handler in (RNS.Transport.exit_handler, RNS.Identity.exit_handler):
+        try:
+            handler()
+        except Exception:
+            pass
+
+
+def restart_mode(under_systemd: bool, os_name: str = os.name) -> str:
+    """How this process starts its successor.
+    "systemd": exit with SYSTEMD_RESTART_CODE, systemd starts it again.
+    "exec": Linux/macOS, the same process becomes the new one (same PID):
+            started in a terminal it stays there, and Ctrl+C still stops it.
+            A separate child would be left in the background once the old
+            process exits, out of reach of Ctrl+C.
+    "spawn": Windows, a new process, then this one exits."""
+    if under_systemd:
+        return "systemd"
+    return "spawn" if os_name == "nt" else "exec"
+
+
 def schedule_restart(host: str, port: int, delay: float = 1.0) -> List[str]:
     """
     Restart rBrowser on host:port after `delay` seconds, long enough for the
@@ -310,31 +349,39 @@ def schedule_restart(host: str, port: int, delay: float = 1.0) -> List[str]:
         # systemd kills everything in it, the new process too. Instead this
         # one ends with an error code and systemd starts rBrowser again.
         under_systemd = bool(os.environ.get(SYSTEMD_ENV))
+        mode = restart_mode(under_systemd)
 
-        # The order matters. The new process is started FIRST, and it waits
-        # for this PID to disappear before it touches Reticulum or the port.
-        # Only then is Reticulum shut down here. The other way round never
-        # got as far as starting anything: RNS's exit handler can end the
-        # process by itself (and it points sys.stdout at os.devnull first,
-        # so it does so without a word).
-        if not under_systemd:
+        # The new process is started FIRST (Windows), and it waits for this
+        # PID to disappear before it touches Reticulum or the port.
+        if mode == "spawn":
             try:
                 _spawn(command, env)
             except Exception as exc:
                 print(f"❌ Could not start the new rBrowser, staying up: {exc}")
                 return
 
-        def _shutdown_rns() -> None:
-            try:
-                import RNS
-                RNS.Reticulum.exit_handler()
-            except Exception:
-                pass
-
         # Saving RNS state is worth a few seconds, not a hang.
-        closer = threading.Thread(target=_shutdown_rns, daemon=True)
+        closer = threading.Thread(target=_save_rns_state, daemon=True)
         closer.start()
         closer.join(timeout=5)
+        if mode == "exec":
+            # The real output (the terminal, a log file) is still open and
+            # the new rBrowser keeps it. Every socket is closed by exec
+            # (Python opens them non-inheritable), the port included. Same
+            # PID: the new process skips wait_for_previous_instance.
+            for stream in (sys.__stdout__, sys.__stderr__):
+                try:
+                    stream.flush()
+                except Exception:
+                    pass
+            try:
+                os.execve(command[0], command, env)
+            except OSError as exc:
+                print(f"❌ Could not restart in place ({exc}), starting a new process", file=sys.__stderr__)
+                try:
+                    _spawn(command, env)
+                except Exception:
+                    pass
         os._exit(SYSTEMD_RESTART_CODE if under_systemd else 0)
 
     threading.Thread(target=_go, name="rbrowser-restart", daemon=True).start()

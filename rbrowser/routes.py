@@ -843,6 +843,17 @@ def register_routes(app, browser) -> None:
                 return jsonify({"status": "error", "error": str(exc)}), 400
         return jsonify(links.status())
 
+    @app.route("/api/netwatch", methods=["GET", "POST"])
+    def api_netwatch():
+        """Settings > System > Internet check (rbrowser/netwatch.py)."""
+        watch = getattr(browser, "netwatch", None)
+        if watch is None:
+            return jsonify({"status": "error", "error": "Not available"}), 500
+        if request.method == "POST":
+            res = watch.update(request.get_json(silent=True) or {})
+            return jsonify(res), (200 if res.get("status") == "success" else 400)
+        return jsonify({"status": "success", **watch.settings(), **watch.status()})
+
     @app.route("/api/console-settings", methods=["GET", "POST"])
     def api_console_settings():
         """Terminal log: which categories of line are shown (console_log.py).
@@ -1226,6 +1237,12 @@ def register_routes(app, browser) -> None:
 
         if not reticulum_ready:
             return jsonify({"status": "waiting", "message": "Reticulum not ready...", "color": "yellow"})
+
+        # rbrowser/netwatch.py: Reticulum still says connected while the
+        # line is dead, so this comes before its states.
+        if status_data.get("internet") == "down":
+            return jsonify({"status": "offline", "message": "Disconnected from the network, waiting for reconnect...",
+                            "color": "red"})
 
         if connection_state == "connected":
             if app_uptime < 60:

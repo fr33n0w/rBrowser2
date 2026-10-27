@@ -51,6 +51,7 @@ from .pagecache import PageCache
 from .visits import Visits
 from .identities import EPHEMERAL, IdentityManager, clean_node_hash
 from .messenger import Messenger
+from .netwatch import NetWatch
 from .retibbs import RetiBBS
 from .nomadnet import (
     decode_lxmf_display_name,
@@ -100,6 +101,9 @@ class NomadNetWebBrowser:
         # Why the connection failed, for the status bar. Reticulum is brought
         # up after the web server, so the page is there to show it.
         self.reticulum_error: Optional[str] = None
+        # Is the internet there (rbrowser/netwatch.py)? Started with the
+        # announce monitoring.
+        self.netwatch = NetWatch()
 
         self._status_cache: Optional[Dict[str, Any]] = None
         self._status_cache_time: Optional[float] = None
@@ -479,6 +483,7 @@ class NomadNetWebBrowser:
                 "connection_state": getattr(self, "connection_state", "connected"),
                 "reticulum_ready": getattr(self, "reticulum_ready", False),
                 "reticulum_error": getattr(self, "reticulum_error", None),
+                **self.netwatch.status(),
             }
             self._status_cache_time = now
             return self._status_cache
@@ -820,6 +825,7 @@ class NomadNetWebBrowser:
         print("=" * 90)
         print("📡 Started NomadNet announce monitoring")
         print("=" * 90)
+        self.netwatch.start()
         # Settings > NomadNet Browser > Node list: start with the recent announces Reticulum
         # already knows (off by default).
         try:
