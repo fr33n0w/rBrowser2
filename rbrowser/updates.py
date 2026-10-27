@@ -3,8 +3,9 @@
 The file holds comments (#) and one line with the version, "2.0.0" - or
 "2.0.0b" for a beta, which comes before 2.0.0 and after 1.x. Only
 version.txt is read from GitHub, plus CHANGELOG.md when there is an update
-(what is new, shown as text); nothing is downloaded or run: the page shows
-the link and the command to update by hand.
+(what is new, shown as text); nothing is downloaded or run here: the page
+shows the link and the command to update by hand, and "Update now" for a
+git clone (selfupdate.py).
 """
 
 from __future__ import annotations

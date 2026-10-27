@@ -19,7 +19,7 @@ A modern, web-based UI for exploring NomadNet nodes and pages over the Reticulum
 
 
 
-> **Beta - v2.0.2b.** rBrowser 2 is published as a beta: everything works, but
+> **Beta - v2.0.3b.** rBrowser 2 is published as a beta: everything works, but
 > some parts of the interface may still have bugs. They are fixed as soon as
 > possible. To hear about updates, switch on *Settings > About > Check for
 > updates at start* (a window tells you when a new version is out, with the
@@ -802,8 +802,15 @@ computes whatever the recipient asks.
 default) reads version.txt on github.com/fr33n0w/rBrowser2; a newer version puts
 a green dot on About, with the link, the command (`git pull`) and what is new
 (the entries of [CHANGELOG.md](CHANGELOG.md) after your version). "Check now"
-asks at once. Nothing is downloaded or run by rBrowser. About also says how to
+asks at once. The check itself downloads nothing. About also says how to
 update for each kind of install (git, zip, Docker).
+
+**Update now.** If rBrowser was installed with `git clone` and git is
+installed, About and the update window have an *Update now* button: it asks
+first, runs `git pull` showing its progress, then restarts rBrowser. Files you
+changed by hand stop it (it names them and changes nothing). If the update
+needs new Python packages, it asks you to run `pip install -r requirements.txt`
+before restarting. A zip or Docker install is updated by hand.
 
 **Advanced options.** Tap the version in Settings > About seven times, as with
 Android's developer options. Advanced holds options for people who know what

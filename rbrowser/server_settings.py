@@ -30,6 +30,10 @@ from typing import Any, Dict, List, Optional
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 5000
 WAIT_PID_ENV = "RBROWSER_WAIT_PID"
+# systemd sets INVOCATION_ID for every service it runs. There a restart is
+# an exit with this code (not 0), and Restart=on-failure starts rBrowser again.
+SYSTEMD_ENV = "INVOCATION_ID"
+SYSTEMD_RESTART_CODE = 75
 
 _HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
                           r"(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$")
@@ -301,17 +305,24 @@ def schedule_restart(host: str, port: int, delay: float = 1.0) -> List[str]:
         except Exception:
             pass
 
+        # As a systemd service (install.sh: Restart=on-failure) the new process
+        # must not be started from here: a clean exit stops the unit and
+        # systemd kills everything in it, the new process too. Instead this
+        # one ends with an error code and systemd starts rBrowser again.
+        under_systemd = bool(os.environ.get(SYSTEMD_ENV))
+
         # The order matters. The new process is started FIRST, and it waits
         # for this PID to disappear before it touches Reticulum or the port.
         # Only then is Reticulum shut down here. The other way round never
         # got as far as starting anything: RNS's exit handler can end the
         # process by itself (and it points sys.stdout at os.devnull first,
         # so it does so without a word).
-        try:
-            _spawn(command, env)
-        except Exception as exc:
-            print(f"❌ Could not start the new rBrowser, staying up: {exc}")
-            return
+        if not under_systemd:
+            try:
+                _spawn(command, env)
+            except Exception as exc:
+                print(f"❌ Could not start the new rBrowser, staying up: {exc}")
+                return
 
         def _shutdown_rns() -> None:
             try:
@@ -324,7 +335,7 @@ def schedule_restart(host: str, port: int, delay: float = 1.0) -> List[str]:
         closer = threading.Thread(target=_shutdown_rns, daemon=True)
         closer.start()
         closer.join(timeout=5)
-        os._exit(0)
+        os._exit(SYSTEMD_RESTART_CODE if under_systemd else 0)
 
     threading.Thread(target=_go, name="rbrowser-restart", daemon=True).start()
     return command

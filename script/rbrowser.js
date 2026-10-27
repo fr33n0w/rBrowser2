@@ -10024,7 +10024,7 @@ function showSettings(category) {
 
         <div class="auto-reload-setting" data-cat="about">
             <label class="settings-label">About</label>
-            <div class="settings-about" id="settings-version" onclick="aboutVersionTap()">rBrowser v2.0.2b</div>
+            <div class="settings-about" id="settings-version" onclick="aboutVersionTap()">rBrowser v2.0.3b</div>
             <div class="settings-hint">Beta: some parts of the interface may still have bugs; they are fixed as soon as possible.</div>
             <div class="settings-hint" id="settings-usage" title="rBrowser's Python process; page = this browser tab (Chrome/Edge only)"></div>
             <div class="settings-hint">Standalone Reticulum Browser: NomadNet, LXMF, RRC, BBS &amp; RMAP WebUI Clients</div>
@@ -10041,7 +10041,8 @@ function showSettings(category) {
             <div class="settings-hint settings-update-howto"><strong>How to update</strong>
                 (your identities and settings stay: they are not in the files that change):
                 <ul>
-                    <li>Installed with <code>git clone</code>: stop rBrowser (Ctrl+C), then in its folder
+                    <li>Installed with <code>git clone</code>: <strong>Update now</strong> (shown when an
+                        update is out) does the <code>git pull</code> and restarts rBrowser. By hand: stop rBrowser (Ctrl+C), then in its folder
                         <code>git pull</code> and <code>pip install -r requirements.txt</code>
                         (or <code>bash install.sh</code> / <code>install.bat</code>), and start it again.
                         As a service: <code>sudo systemctl restart rbrowser</code> after the pull.</li>
@@ -10655,7 +10656,10 @@ function renderUpdateInfo() {
         box.hidden = false;
         box.innerHTML = `<b>rBrowser v${escapeHtml(info.remote)} is out</b> (you have v${escapeHtml(info.local)}).<br>
             <a href="${escapeHtml(info.repo)}" target="_blank" rel="noopener noreferrer">${escapeHtml(info.repo)}</a><br>
-            In the rBrowser folder: <code>${escapeHtml(info.command)}</code>, then restart rBrowser.${updateNewsHtml(info)}`;
+            In the rBrowser folder: <code>${escapeHtml(info.command)}</code>, then restart rBrowser.${updateNewsHtml(info)}
+            ${updateNowHtml(info)}`;
+        const btn = box.querySelector('.update-now-btn');
+        if (btn) btn.onclick = () => confirmSelfUpdate(info);
     } else if (info.checked) {
         box.hidden = false;
         box.textContent = info.status === 'success' ? `Up to date (v${info.local}).` : (info.error || 'Check failed');
@@ -10721,6 +10725,7 @@ function showUpdatePopup(info) {
         <div class="auto-reload-actions">
             <button class="btn-cancel">Later</button>
             <a class="btn-save" href="${escapeHtml(info.repo)}" target="_blank" rel="noopener noreferrer">Open GitHub</a>
+            ${selfUpdateCan(info) ? '<button class="btn-save update-now-btn">Update now</button>' : ''}
         </div></div>`;
     const done = () => {
         overlay.remove();
@@ -10728,13 +10733,106 @@ function showUpdatePopup(info) {
     };
     overlay.querySelector('.btn-cancel').onclick = done;
     overlay.querySelector('a.btn-save').addEventListener('click', done);
+    const now = overlay.querySelector('.update-now-btn');
+    if (now) now.onclick = () => { done(); confirmSelfUpdate(info); };
     overlay.addEventListener('click', e => { if (e.target === overlay) done(); });
     document.body.appendChild(overlay);
 }
 
+// ─── Update now (rbrowser/selfupdate.py) ───
+// git pull in the rBrowser folder, then the usual restart (doRestart). Only
+// for a git clone with git installed; otherwise the reason is shown and the
+// update stays by hand.
+function selfUpdateCan(info) {
+    return !!(info && info.update && info.self_update && info.self_update.can);
+}
+
+function updateNowHtml(info) {
+    const s = info && info.self_update;
+    if (!s) return '';
+    if (s.can) return '<button class="settings-export update-now-btn" type="button">Update now</button>';
+    return `<div class="settings-hint update-now-off">Update now: ${escapeHtml(s.reason || 'not available here')}</div>`;
+}
+
+function confirmSelfUpdate(info) {
+    const restart = !!(info.self_update && info.self_update.can_restart);
+    const overlay = document.createElement('div');
+    overlay.className = 'auto-reload-modal choice-modal';
+    overlay.innerHTML = `<div class="auto-reload-dialog choice-dialog">
+        <h3>Update to rBrowser v${escapeHtml(info.remote)}?</h3>
+        <div class="choice-body">rBrowser downloads the new version with <code>git pull</code>${restart
+            ? ' and then <strong>restarts by itself</strong>. Open chats, transfers and downloads are interrupted.'
+            : '. It cannot restart itself here (started by waitress-serve or as a service): restart it by hand afterwards.'}
+            Your identities, settings and messages stay.</div>
+        <div class="auto-reload-actions">
+            <button class="btn-cancel">Cancel</button>
+            <button class="btn-save">${restart ? 'Update and restart' : 'Update'}</button>
+        </div></div>`;
+    overlay.querySelector('.btn-cancel').onclick = () => overlay.remove();
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelector('.btn-save').onclick = () => { overlay.remove(); runSelfUpdate(restart); };
+    document.body.appendChild(overlay);
+}
+
+async function runSelfUpdate(restart) {
+    // Blocks the page: no click goes through until it is over.
+    const overlay = document.createElement('div');
+    overlay.className = 'auto-reload-modal choice-modal restart-overlay';
+    overlay.innerHTML = `<div class="auto-reload-dialog choice-dialog">
+        <h3>Updating rBrowser…</h3>
+        <div class="update-progress"><div></div></div>
+        <div class="choice-body" id="update-status">Starting git pull.</div>
+        <div class="auto-reload-actions" hidden><button class="btn-save">Close</button></div>
+        </div>`;
+    document.body.appendChild(overlay);
+    const bar = overlay.querySelector('.update-progress > div');
+    const status = overlay.querySelector('#update-status');
+    const actions = overlay.querySelector('.auto-reload-actions');
+    const finish = html => {
+        status.innerHTML = html;
+        actions.hidden = false;
+        actions.querySelector('button').onclick = () => overlay.remove();
+    };
+
+    try {
+        const data = await fetch('/api/update/start', { method: 'POST' }).then(r => r.json());
+        if (data.status !== 'success') throw new Error(data.error || 'Refused');
+    } catch (e) {
+        finish(`The update could not start: ${escapeHtml(e.message)}`);
+        return;
+    }
+
+    const started = Date.now();
+    let s = {};
+    while (Date.now() - started < 360000) {
+        await new Promise(r => setTimeout(r, 400));
+        try { s = await fetch('/api/update/status', { cache: 'no-store' }).then(r => r.json()); } catch (e) { continue; }
+        const pct = Math.max(0, Math.min(100, Number(s.percent) || 0));
+        bar.style.width = `${pct}%`;
+        if (s.state === 'running') {
+            status.textContent = `${s.phase || 'Downloading'}: ${pct}%`;
+            continue;
+        }
+        break;
+    }
+
+    if (s.state === 'error') return finish(escapeHtml(s.error || 'The update failed'));
+    if (s.state !== 'done') return finish('No answer from git pull: look at the rBrowser console.');
+    bar.style.width = '100%';
+    if (!s.updated) return finish('Already up to date: nothing to download.');
+    if (s.requirements) {
+        return finish(`Downloaded. This version needs new Python packages: stop rBrowser, run
+            <code>pip install -r requirements.txt</code> (or <code>install.bat</code> /
+            <code>bash install.sh</code>) in its folder, then start it again.`);
+    }
+    if (!restart) return finish('Downloaded. Restart rBrowser to use the new version.');
+    overlay.remove();
+    doRestart(location.origin, location.origin);
+}
+
 // rBrowser's version on the empty pages of the clients (version.txt, via
 // /api/version): "rBrowser v2.0.0" and the client's name under it, as its title.
-let RB_VERSION = '2.0.2b';
+let RB_VERSION = '2.0.3b';
 
 function clientWelcome(icon, name) {
     return `<div class="client-welcome"><h2 class="rb-version">rBrowser v${RB_VERSION}</h2>

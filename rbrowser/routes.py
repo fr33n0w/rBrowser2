@@ -1407,9 +1407,33 @@ def register_routes(app, browser) -> None:
         (?force=1 skips the 10 minute cache)."""
         from . import updates
         if request.args.get("check") == "1":
-            return jsonify(updates.check(force=request.args.get("force") == "1"))
-        return jsonify({"status": "success", "local": updates.local_version(),
-                        "repo": updates.REPO_URL, "command": updates.UPDATE_COMMAND})
+            out = updates.check(force=request.args.get("force") == "1")
+        else:
+            out = {"status": "success", "local": updates.local_version(),
+                   "repo": updates.REPO_URL, "command": updates.UPDATE_COMMAND}
+        return jsonify({**out, "self_update": _self_update_info()})
+
+    def _self_update_info():
+        """Can "Update now" run here, and restart afterwards?"""
+        from . import selfupdate
+        settings = _server_settings()
+        return {**selfupdate.availability(),
+                "can_restart": bool(settings is not None and settings.can_restart())}
+
+    @app.route("/api/update/start", methods=["POST"])
+    def api_update_start():
+        """Settings > About > Update now: git pull in the rBrowser folder.
+        The page asked first; it restarts rBrowser itself once this is done."""
+        from . import selfupdate
+        result = selfupdate.start()
+        if result.get("status") == "success":
+            print("⬇️ Update requested from the page: git pull")
+        return jsonify(result), (200 if result.get("status") == "success" else 409)
+
+    @app.route("/api/update/status")
+    def api_update_status():
+        from . import selfupdate
+        return jsonify({"status": "success", **selfupdate.status()})
 
     @app.route("/api/rrc/identity/<address>", methods=["POST"])
     def rrc_hub_identity(address):

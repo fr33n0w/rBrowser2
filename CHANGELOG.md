@@ -3,6 +3,11 @@
 What changes in each version. rBrowser reads this file from GitHub when an
 update is out, and shows the new entries in Settings > About.
 
+## 2.0.3b - 2026-10-27
+
+- Added Auto-Update on new releases.
+- Fixed restart as a service.
+
 ## 2.0.2b - 2026-10-26
 
 - RRC: green badge for new joins on rooms and tabs.

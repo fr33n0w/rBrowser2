@@ -12074,6 +12074,23 @@ body.app-window .content {
     user-select: all;
 }
 
+/* Update now: the button under "vX is out", and the bar while git pulls. */
+.settings-update .update-now-btn { display: block; margin-top: 8px; }
+.update-now-off { margin-top: 6px; opacity: .75; }
+.update-progress {
+    height: 8px;
+    margin: 12px 0 6px;
+    border-radius: 4px;
+    background: #21262d;
+    overflow: hidden;
+}
+.update-progress > div {
+    height: 100%;
+    width: 0;
+    background: #3fb950;
+    transition: width .3s;
+}
+
 /* The clients' empty page: rBrowser's version, the client's name under it. */
 .client-welcome {
     margin-bottom: 18px;
