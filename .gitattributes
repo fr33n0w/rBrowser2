@@ -1,6 +1,6 @@
 # Shell scripts must keep LF and batch files CRLF, whatever the checkout system.
 # Batch files are kept byte for byte as stored (CRLF): with "text eol=crlf"
 # git wanted them LF inside the repo, and a CRLF one uploaded from the web
-# looked changed in every clone, which stopped git pull from rBroser2 auto-updates.
+# looked changed in every clone, which stopped git pull from rBrowser2 auto-updates.
 *.sh text eol=lf
 *.bat -text
