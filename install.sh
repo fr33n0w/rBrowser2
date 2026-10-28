@@ -34,10 +34,12 @@ say "rBrowser installer - folder: $DIR"
 
 # ─── Python 3.9 or newer, with pip ───
 if [ "$TERMUX" = yes ]; then
-    # Reticulum's cryptography is built from source on Android: the tools
-    # are needed even when Python is already there (quick if installed).
-    say "Termux: installing Python and the tools to build Reticulum's cryptography"
-    pkg install -y python python-psutil clang rust binutils make cmake pkg-config libffi openssl libsodium || fail "pkg install failed"
+    # python-cryptography is Termux's prebuilt one, so pip does not have to
+    # build it from source; the tools stay in case pip still wants to.
+    say "Termux: installing Python, cryptography and the build tools"
+    pkg install -y python python-psutil python-cryptography clang rust binutils make cmake pkg-config libffi openssl libsodium || fail "pkg install failed"
+    # maturin (the Rust builder) stops without it on Android.
+    export ANDROID_API_LEVEL="${ANDROID_API_LEVEL:-$(getprop ro.build.version.sdk 2>/dev/null || echo 24)}"
 fi
 PY=""
 for candidate in python3 python; do
@@ -62,22 +64,57 @@ say "Installing the Python packages (requirements.txt)"
 # --no-warn-script-location: the PATH is taken care of below.
 PIP_OPTS="--no-warn-script-location"
 USER_OPTS="--user --break-system-packages"
-ASK_USER="This system protects its own Python (externally-managed): pip refuses the packages
-unless they go to your user (~/.local) with --break-system-packages, as the Reticulum manual
-does. Without them rBrowser cannot run. Install them that way?"
+VENV="$DIR/.venv"
+USE_VENV=no
+
+use_venv() { # the packages in .venv, in this folder: the system Python untouched
+    if [ ! -x "$VENV/bin/python" ]; then
+        if ! "$PY" -m venv "$VENV"; then
+            rm -rf "$VENV"
+            if command -v apt-get >/dev/null 2>&1 && ask "The venv module is missing. Install it now (sudo apt install python3-venv)?" y; then
+                sudo apt-get install -y python3-venv && "$PY" -m venv "$VENV" || fail "Could not make the venv"
+            else
+                fail "Could not make the venv: install python3-venv, then run this script again."
+            fi
+        fi
+    fi
+    PY="$VENV/bin/python"
+    USE_VENV=yes
+    echo "Python of the venv: $PY"
+}
+
+choose_target() { # externally-managed system: the user picks where the packages go
+    echo
+    echo "This system protects its own Python (externally-managed): pip will not put"
+    echo "packages into it. Where should rBrowser's packages go?"
+    echo "  1) A venv in this folder (.venv): nothing changes outside this folder."
+    echo "     Start rBrowser with .venv/bin/python rBrowser.py"
+    echo "  2) Your user (~/.local) with --user --break-system-packages, as the"
+    echo "     Reticulum manual does: rnsd & co. shared with your other programs."
+    local choice
+    read -r -p "Choose 1 or 2 [1]: " choice || choice=""
+    case "${choice:-1}" in
+        1) use_venv ;;
+        2) PIP_OPTS="$PIP_OPTS $USER_OPTS" ;;
+        *) fail "Not installed. Run again and choose 1 or 2." ;;
+    esac
+}
+
+if [ -x "$VENV/bin/python" ]; then
+    # Installed in the venv before: it stays there.
+    use_venv
 # Debian 12+, Pi OS, Ubuntu 23.04+: known before trying, no failed try first.
-if "$PY" -c 'import os, sys, sysconfig; sys.exit(0 if os.path.exists(os.path.join(sysconfig.get_paths()["stdlib"], "EXTERNALLY-MANAGED")) else 1)' 2>/dev/null; then
-    ask "$ASK_USER" y || fail "Not installed. Run again and answer y, or install requirements.txt your own way (a venv, say)."
-    PIP_OPTS="$PIP_OPTS $USER_OPTS"
+elif "$PY" -c 'import os, sys, sysconfig; sys.exit(0 if os.path.exists(os.path.join(sysconfig.get_paths()["stdlib"], "EXTERNALLY-MANAGED")) else 1)' 2>/dev/null; then
+    choose_target
 fi
 LOG="$(mktemp 2>/dev/null || echo /tmp/rbrowser-pip.log)"
 # shellcheck disable=SC2086
 if "$PY" -m pip install $PIP_OPTS -r requirements.txt 2>&1 | tee "$LOG"; [ "${PIPESTATUS[0]}" -ne 0 ]; then
     # Refused anyway (the check above missed it): the same question.
-    if grep -q "externally-managed-environment" "$LOG" && [[ "$PIP_OPTS" != *"$USER_OPTS"* ]]; then
-        ask "$ASK_USER" y || fail "Not installed. Run again and answer y, or install requirements.txt your own way (a venv, say)."
+    if grep -q "externally-managed-environment" "$LOG" && [ "$USE_VENV" = no ] && [[ "$PIP_OPTS" != *"$USER_OPTS"* ]]; then
+        choose_target
         # shellcheck disable=SC2086
-        "$PY" -m pip install $PIP_OPTS $USER_OPTS -r requirements.txt || fail "pip install failed (see above)."
+        "$PY" -m pip install $PIP_OPTS -r requirements.txt || fail "pip install failed (see above)."
     else
         fail "pip install failed (see above). On Termux check that rustc --version works, then run again."
     fi
@@ -85,8 +122,14 @@ fi
 rm -f "$LOG"
 
 # ─── rnsd, rnstatus... on the PATH ───
-USER_BIN="$("$PY" -m site --user-base 2>/dev/null)/bin"
-if [ -x "$USER_BIN/rnsd" ] && ! command -v rnsd >/dev/null 2>&1; then
+# Not the venv's bin: its python would come before the system one.
+if [ "$USE_VENV" = yes ]; then
+    USER_BIN="$VENV/bin"
+    echo "rnsd, rnstatus and the other Reticulum programs are in $USER_BIN"
+else
+    USER_BIN="$("$PY" -m site --user-base 2>/dev/null)/bin"
+fi
+if [ "$USE_VENV" = no ] && [ -x "$USER_BIN/rnsd" ] && ! command -v rnsd >/dev/null 2>&1; then
     LINE="export PATH=\"$USER_BIN:\$PATH\""
     for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do
         [ -f "$rc" ] || [ "$rc" = "$HOME/.profile" ] || continue
@@ -145,7 +188,11 @@ if [ "$SERVICE" = yes ]; then
 else
     echo "Start rBrowser with:"
     echo
-    echo "  cd \"$DIR\" && $(basename "$PY") rBrowser.py"
+    if [ "$USE_VENV" = yes ]; then
+        echo "  cd \"$DIR\" && .venv/bin/python rBrowser.py"
+    else
+        echo "  cd \"$DIR\" && $(basename "$PY") rBrowser.py"
+    fi
     [ "$TERMUX" = yes ] && echo "  (Termux: run termux-wake-lock first, so Android does not pause it)"
 fi
 echo
