@@ -1045,7 +1045,8 @@ It also runs well on a remote machine (a Raspberry Pi at home, a server):
 | Windows 10 (Python 3.12) | tested: everyday development machine |
 | Raspberry Pi Zero 2 W, Raspberry Pi OS 13 trixie (Python 3.13, RNS 1.5.7) | tested |
 | Docker on Raspberry Pi Zero 2 W (docker.io 26, compose 2.26) | tested: builds in about 9 minutes, image 271 MB, runs in 512 MB of RAM (uses swap) |
-| Android, Termux | tested: installed with install.sh |
+| Android, Termux 0.118.0 (Python 3.14) | tested: installed with install.sh |
+| Debian 13, in a venv (install.sh option 1, or a venv of your own) | tested on the Raspberry Pi |
 | Browsers: Chrome desktop, Chrome on Android (phone layout) | tested |
 | macOS | not tested (no Mac available): it should work as on Linux, reports welcome |
 | Other Linux desktops | not tested yet: same code as the Pi |
@@ -1082,8 +1083,12 @@ Optional, not in requirements.txt: `pycodec2` or `ffmpeg` on the PATH (to play C
 
 The installer:
 
-- installs the Python packages of `requirements.txt` (on Debian 12+ and Pi OS
-  for your user, the way the Reticulum manual does);
+- installs the Python packages of `requirements.txt`. In a venv you have
+  activated, it installs there. On Debian 12+, Ubuntu and Pi OS it asks
+  where: a venv in this folder (`.venv`, then start with
+  `.venv/bin/python rBrowser.py`) or your user with
+  `--break-system-packages`, the way the Reticulum manual does. On Termux it
+  takes the prebuilt `python-cryptography`, nothing to compile;
 - makes sure Reticulum reaches rmap.world (`rns_setup.py`): with no config
   it writes a basic one (a BackboneInterface on Linux and Android, a
   TCPClientInterface on Windows and macOS); in yours it asks to add
@@ -1102,7 +1107,7 @@ pip install -r requirements.txt
 python3 rBrowser.py          # Windows: python rBrowser.py
 ```
 
-(Debian 12+ and Pi OS: `pip install --user --break-system-packages -r requirements.txt`.)
+(Debian 12+ and Pi OS: `pip install --user --break-system-packages -r requirements.txt`, or a venv, see below.)
 
 Then open `http://localhost:5000`. Details for each option below.
 
@@ -1156,6 +1161,14 @@ preferences there (your name, your nick and the rest).
    The programs pip installs (`rnsd`, `rnstatus`, `nomadnet`...) go to
    `~/.local/bin`: if the shell does not find them, open a new terminal or
    add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc`.
+
+   Not allowed to use `--break-system-packages` (a work PC, say)? A venv:
+
+   ```bash
+   python3 -m venv .venv          # Debian: sudo apt install python3-venv first
+   .venv/bin/pip install -r requirements.txt
+   .venv/bin/python rBrowser.py
+   ```
 
 3. **Start rBrowser:**
    ```bash
@@ -1283,9 +1296,9 @@ You can run rBrowser directly on Android by using [Termux](https://termux.dev/),
    cd rBrowser2
    bash install.sh
    ```
-   - It installs the Termux packages (Python, psutil and the tools that build
-     Reticulum's `cryptography`: this can take several minutes), the Python
-     packages, and makes sure Reticulum reaches rmap.world (a basic config if
+   - It installs the Termux packages (Python, psutil, the prebuilt
+     `python-cryptography` and the build tools, in case pip still needs
+     them), the Python packages, and makes sure Reticulum reaches rmap.world (a basic config if
      you have none, or rmap.world added or switched on in yours).
    - Without git: download the zip of the release from GitHub, `unzip` it and run
      `bash install.sh` in its folder.
@@ -1293,14 +1306,15 @@ You can run rBrowser directly on Android by using [Termux](https://termux.dev/),
    <details><summary>By hand, without the installer</summary>
 
    ```bash
-   pkg install python python-psutil git clang rust binutils make cmake pkg-config libffi openssl libsodium
+   pkg install python python-psutil python-cryptography git clang rust binutils make cmake pkg-config libffi openssl libsodium
    git clone https://github.com/fr33n0w/rBrowser2.git
    cd rBrowser2
    pip install -r requirements.txt
    mkdir -p ~/.reticulum && cp config ~/.reticulum/config   # only if you have no Reticulum config
    ```
-   If pip exits with `Rust not found` or `Unsupported platform`, check that
-   `rustc --version` works inside Termux and run it again.
+   If pip still builds `cryptography` and stops with *Failed to determine
+   Android API level*, run `export ANDROID_API_LEVEL=$(getprop ro.build.version.sdk)`
+   and the pip line again.
    </details>
 
 3. **Run rBrowser**
@@ -1525,6 +1539,8 @@ External software and all its rights belong to the respective developers.
 
 #### Thanks to: 
 Mark: this would be useless without your protocol! :)
+
+Ant9000 (https://github.com/ant9000) for discovering the install.sh error in Termux with python 3.14 and the idea of venv installation.
 
 Mirko for remotely testing the Guest Mode on Safari (Mac) Firefox (Debian) DuckDuckGo (Android) 
 
