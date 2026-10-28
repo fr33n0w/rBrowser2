@@ -100,11 +100,16 @@ choose_target() { # externally-managed system: the user picks where the packages
     esac
 }
 
-if [ -x "$VENV/bin/python" ]; then
-    # Installed in the venv before: it stays there.
+if "$PY" -c 'import sys; sys.exit(0 if sys.prefix != sys.base_prefix else 1)' 2>/dev/null; then
+    # A venv of your own, activated: pip installs there, no question.
+    echo "Active venv found: installing there ($("$PY" -c 'import sys; print(sys.prefix)'))."
+    USE_VENV=own
+elif [ -x "$VENV/bin/python" ]; then
+    echo "No active venv: using rBrowser's own venv from the last install (.venv)."
     use_venv
 # Debian 12+, Pi OS, Ubuntu 23.04+: known before trying, no failed try first.
 elif "$PY" -c 'import os, sys, sysconfig; sys.exit(0 if os.path.exists(os.path.join(sysconfig.get_paths()["stdlib"], "EXTERNALLY-MANAGED")) else 1)' 2>/dev/null; then
+    echo "No active venv found."
     choose_target
 fi
 LOG="$(mktemp 2>/dev/null || echo /tmp/rbrowser-pip.log)"
