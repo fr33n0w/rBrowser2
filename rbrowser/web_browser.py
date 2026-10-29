@@ -52,6 +52,7 @@ from .visits import Visits
 from .identities import EPHEMERAL, IdentityManager, clean_node_hash
 from .messenger import Messenger
 from .netwatch import NetWatch
+from .rnswatch import RnsWatch
 from .retibbs import RetiBBS
 from .nomadnet import (
     decode_lxmf_display_name,
@@ -83,6 +84,24 @@ def interface_label(interface: str) -> str:
     return text
 
 
+class AnnounceCounter:
+    """Every announce that reaches this rBrowser, of any kind (NomadNet,
+    LXMF, propagation, RRC, BBS, anything else): the status bar's total.
+    The answers to path requests are not announces: RNS keeps them from a
+    handler with receive_path_responses False."""
+
+    aspect_filter = None
+    receive_path_responses = False
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.registered = False
+
+    def received_announce(self, destination_hash: bytes, announced_identity: Any,
+                          app_data: Optional[bytes], *args: Any, **kwargs: Any) -> None:
+        self.count += 1
+
+
 class NomadNetWebBrowser:
     """Main controller for rBrowser runtime state."""
 
@@ -94,6 +113,7 @@ class NomadNetWebBrowser:
         self.nomadnet_nodes: Dict[str, Dict[str, Any]] = {}
         self.running = False
         self.announce_count = 0
+        self.announces = AnnounceCounter()
         self.start_time = time.time()
         self.last_announce_time: Optional[float] = None
         self.connection_state = "initializing"
@@ -104,6 +124,8 @@ class NomadNetWebBrowser:
         # Is the internet there (rbrowser/netwatch.py)? Started with the
         # announce monitoring.
         self.netwatch = NetWatch()
+        # Are Reticulum's own interfaces up (rbrowser/rnswatch.py)? Always on.
+        self.rnswatch = RnsWatch(lambda: self.reticulum if self.reticulum_ready else None)
 
         self._status_cache: Optional[Dict[str, Any]] = None
         self._status_cache_time: Optional[float] = None
@@ -169,10 +191,12 @@ class NomadNetWebBrowser:
         from .rrc import RRC
         self.rrc = RRC(self)
 
-        print("=" * 90)
+        print()
         from . import updates
-        print(f"🌐 rBrowser v{updates.local_version()} - Standalone Reticulum Browser - https://github.com/fr33n0w/rBrowser2")
-        print("=" * 90)
+        # Two lines: one of ~90 characters wrapped on a phone's terminal.
+        print(f"🌐 rBrowser v{updates.local_version()} - Standalone Reticulum Browser\n"
+              f"{' ' * 14}https://github.com/fr33n0w/rBrowser2")
+        print()
 
         # Reticulum is NOT started here any more. It used to be, which meant
         # the web server could only start once Reticulum was up - and if it
@@ -207,6 +231,9 @@ class NomadNetWebBrowser:
             # announces are already crossing the network.
             self.lxmf_handler = LXMFAnnounceHandler(self)
             RNS.Transport.register_announce_handler(self.lxmf_handler)
+            if not self.announces.registered:
+                RNS.Transport.register_announce_handler(self.announces)
+                self.announces.registered = True
 
             self.reticulum_ready = True
             self.connection_state = "connected"
@@ -216,7 +243,6 @@ class NomadNetWebBrowser:
                       f" ({self.identities.name_of(self.identities.active_id)})")
             else:
                 print("🟢 Reticulum Connected! (no identity hash available)")
-            print("=" * 90)
             self.messenger.start_on_main_thread()
             self.retibbs.start()
             self.rrc.start()
@@ -484,6 +510,7 @@ class NomadNetWebBrowser:
                 "reticulum_ready": getattr(self, "reticulum_ready", False),
                 "reticulum_error": getattr(self, "reticulum_error", None),
                 **self.netwatch.status(),
+                **self.rnswatch.status(),
             }
             self._status_cache_time = now
             return self._status_cache
@@ -822,10 +849,11 @@ class NomadNetWebBrowser:
 
     def start_monitoring(self) -> None:
         self.running = True
-        print("=" * 90)
+        print()
         print("📡 Started NomadNet announce monitoring")
-        print("=" * 90)
+        print()
         self.netwatch.start()
+        self.rnswatch.start()
         # Settings > NomadNet Browser > Node list: start with the recent announces Reticulum
         # already knows (off by default).
         try:

@@ -77,6 +77,9 @@ class PropagationNodes:
     def __init__(self, on_change: Optional[Any] = None) -> None:
         self.lock = threading.Lock()
         self.nodes: Dict[str, Dict[str, Any]] = {}
+        # Heard live since rBrowser started (not the prefill from Reticulum's
+        # memory, not an answer to a path request): the status bar's number.
+        self.live: set = set()
         self.on_change = on_change
         self._registered = False
         self._load()
@@ -119,6 +122,8 @@ class PropagationNodes:
         if info is None:
             return
         h = destination_hash.hex()
+        if not kwargs.get("is_path_response"):
+            self.live.add(h)
         try:
             info["operator_lxmf"] = RNS.Destination.hash(announced_identity, "lxmf", "delivery").hex()
             info["node"] = RNS.Destination.hash(announced_identity, "nomadnetwork", "node").hex()

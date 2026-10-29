@@ -1040,30 +1040,173 @@ body.favorites-off.history-off .favorites-section {
     background: #1f6feb; 
 }
 
+/* One line across the whole window, at the top or at the bottom (class on
+   <body>, Settings > System): the state, the counters, CPU/RAM. Too long
+   for the window, it scrolls sideways. */
+:root {
+    --sb-h: 24px;
+}
+
 .status-bar {
-    position: absolute !important;
-    bottom: 30px !important;
-    left: 0 !important;
-    right: 0 !important;
-    padding: 4px 8px !important;
-    margin: 0 !important;
-    font-size: 12px !important;
-    line-height: 1.1 !important;
-    height: 52px !important;
-    min-height: 52px !important;
-    max-height: 52px !important;
-    box-sizing: border-box !important;
+    position: fixed;
+    left: 0;
+    right: 0;
+    z-index: 1500;
+    height: var(--sb-h);
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
     background: #0d1117;
-    border-top: 1px solid #30363d;
-    /* Three rows: the state, the counters, CPU/RAM. */
-    display: flex !important;
-    flex-direction: column;
-    justify-content: center;
-    gap: 3px;
-    padding: 3px 10px !important;
-    font-size: 11.5px !important;
-    line-height: 1.2 !important;
+    font-size: 11.5px;
+    line-height: 1.2;
     color: #c9d1d9;
+    white-space: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+}
+
+.status-bar::-webkit-scrollbar {
+    display: none;
+}
+
+body.sb-top .status-bar {
+    top: 0;
+    border-bottom: 1px solid #30363d;
+}
+
+body.sb-bottom .status-bar {
+    bottom: 0;
+    border-top: 1px solid #30363d;
+}
+
+/* NomadNet's shortcuts sit on the status bar when that is at the bottom. */
+body.sb-bottom .shortcuts-bar {
+    bottom: var(--sb-h);
+}
+
+.status-bar .sb-row + .sb-row {
+    margin-left: 12px;
+    padding-left: 12px;
+    border-left: 1px solid #30363d;
+}
+
+.status-bar .sb-stats,
+.status-bar .sb-heard {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.status-bar .sb-heard:empty {
+    display: none;
+}
+
+.status-bar .sb-heard .sb-stat::before {
+    content: "·";
+    margin-right: 1px;
+    color: #6e7681;
+}
+
+/* Icons, the names in the tooltips; CPU, RAM and Page keep theirs, and
+   go to the right end (closer as the window narrows). */
+.status-bar .sb-ico {
+    display: inline-flex;
+    align-items: center;
+    color: #8b949e;
+}
+
+.status-bar .sb-label:not(.sb-keep):not(.sb-status-label) {
+    display: none;
+}
+
+.status-bar .sb-stats {
+    padding-right: 12px;
+}
+
+.status-bar .sb-row.sb-usage-row {
+    margin-left: auto;
+}
+
+/* A long Reticulum error is cut with "..." (the whole of it in the bar's
+   tooltip): the icons, CPU/RAM and the clock always stay in sight. */
+.status-bar .status-indicator {
+    max-width: 40vw;
+}
+
+.status-bar .sb-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.status-bar .sb-clock {
+    color: #e6edf3;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.5px;
+}
+
+.status-bar .sb-ico svg {
+    width: 12px;
+    height: 12px;
+}
+
+/* The page under the bar: the old layout gave .main, the list and the page
+   the whole screen (100vh, also !important on phones); here they lose the
+   bar's height, above or below it. */
+body.sb-top {
+    --sb-top: var(--sb-h);
+}
+
+body.sb-bottom {
+    --sb-top: 0px;
+}
+
+body.sb-top .main,
+body.sb-bottom .main {
+    top: var(--sb-top) !important;
+    height: calc(100vh - var(--sb-h)) !important;
+    height: calc(100dvh - var(--sb-h)) !important;
+}
+
+body.sb-top .main > .sidebar,
+body.sb-bottom .main > .sidebar,
+body.sb-top .main > .content,
+body.sb-bottom .main > .content {
+    height: 100% !important;
+}
+
+/* Phones: the list and the page are fixed to the screen, not to .main. */
+body.mobile-device.sb-top .main > .sidebar,
+body.mobile-device.sb-bottom .main > .sidebar,
+body.mobile-device.sb-top .main > .content,
+body.mobile-device.sb-bottom .main > .content {
+    top: var(--sb-top) !important;
+    bottom: auto !important;
+    height: calc(100vh - var(--sb-h)) !important;
+    height: calc(100dvh - var(--sb-h)) !important;
+}
+
+body.mobile-device .status-bar .sb-status-label {
+    display: none;
+}
+
+@media (max-width: 767px), (hover: none) and (pointer: coarse) {
+    body.sb-top .main > .sidebar,
+    body.sb-bottom .main > .sidebar,
+    body.sb-top .main > .content,
+    body.sb-bottom .main > .content {
+        top: var(--sb-top) !important;
+        bottom: auto !important;
+        height: calc(100vh - var(--sb-h)) !important;
+        height: calc(100dvh - var(--sb-h)) !important;
+    }
+
+    .status-bar .sb-status-label {
+        display: none;
+    }
 }
 
 /* Same font and size as the two rows above it. */
@@ -1076,11 +1219,10 @@ body.favorites-off.history-off .favorites-section {
 }
 
 .status-bar .sb-row {
+    flex: none;
     display: flex;
     align-items: center;
     gap: 6px;
-    min-width: 0;
-    overflow: hidden;
 }
 
 .status-bar .status-indicator {
@@ -1635,8 +1777,6 @@ input:disabled + .slider {
     font-family: 'Consolas', 'Courier New', 'Liberation Mono', monospace;
     font-weight: 600;
     -webkit-font-smoothing: none;
-    -moz-osx-font-smoothing: unset;
-    font-smooth: never;
     /* Only the colours animate. This was "all 0.2s": the font size, line
        height and width then animated on every zoom change, and the fit
        measured the page in mid-animation - at the old size - so the same
@@ -1929,15 +2069,12 @@ body.center-pages .page-content:has(> .error) {
 }
 
 /* Settings at the end of the bar: the "+" shape, an icon, the name on
-   hover (title). Desktop only: on a phone the room goes to the pages. */
+   hover (title). On a phone too, as wide as the "+" (the .tab-new rules). */
 .tab-gear {
     display: flex;
     align-items: center;
+    justify-content: center;
 }
-@media (max-width: 767px) {
-    .tab-bar .tab.tab-gear, #tabs-container .tab.tab-gear { display: none !important; }
-}
-html.mobile-device .tab-bar .tab.tab-gear { display: none !important; }
 
 
 .tab-content-wrapper {
@@ -2058,12 +2195,29 @@ html.mobile-device .tab-bar .tab.tab-gear { display: none !important; }
     border: 1px solid #30363d;
 }
 
-.auto-reload-setting label {
+.auto-reload-setting label,
+.auto-reload-setting .settings-label,
+.auto-reload-setting .auto-reload-heading {
     display: block;
     color: #e6edf3;
     font-size: 14px;
     font-weight: 600;
     margin-bottom: 8px;
+}
+
+/* Headings, not labels: the arrow a label had, not the text cursor. */
+.auto-reload-setting .settings-label,
+.auto-reload-setting .auto-reload-heading {
+    cursor: default;
+}
+
+/* A row's text turned into the label of its field: it looks like the text. */
+.auto-reload-setting label.settings-row-label {
+    display: inline;
+    color: inherit;
+    font-size: inherit;
+    font-weight: inherit;
+    margin: 0;
 }
 
 .auto-reload-toggle {
@@ -2643,11 +2797,6 @@ html.mobile-device .tab-bar .tab.tab-gear { display: none !important; }
         padding: 8px;
     }
     
-    .sidebar .node-item .star-btn,
-    .sidebar .node-item .info-btn {
-        display: none !important;
-    }
-    
     html {
         position: fixed !important;
         overflow: hidden !important;
@@ -2980,11 +3129,6 @@ html.mobile-device .tab-bar .tab.tab-gear { display: none !important; }
         min-height: 44px;
         min-width: 44px;
         padding: 8px;
-    }
-    
-    .sidebar .node-item .star-btn,
-    .sidebar .node-item .info-btn {
-        display: none !important;
     }
     
     html {
@@ -5864,6 +6008,258 @@ body.page-fullscreen .content {
     background: #21262d;
     color: #6e7681;
     cursor: not-allowed;
+}
+
+/* ============================================
+   VANITY ADDRESS DIALOG (Settings > Identities)
+   Above Settings, below the question dialogs.
+   ============================================ */
+.vanity-modal {
+    z-index: 10002;
+}
+
+.vanity-dialog {
+    width: 480px;
+}
+
+.vanity-lead {
+    margin: 0 0 8px 0;
+    color: #e6edf3;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.vanity-intro {
+    margin: 0 0 12px 0;
+    color: #8b949e;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.vanity-info {
+    margin: 0 0 12px 0;
+    font-size: 12px;
+    color: #8b949e;
+}
+
+.vanity-info summary {
+    cursor: pointer;
+    color: #58a6ff;
+    user-select: none;
+}
+
+.vanity-info p {
+    margin: 8px 0 0 0;
+    line-height: 1.5;
+}
+
+.vanity-machine {
+    margin: 4px 0 12px 0;
+    padding: 6px 10px;
+    border-left: 2px solid #30363d;
+    color: #8b949e;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.vanity-machine strong {
+    color: #e6edf3;
+}
+
+.vanity-machine-warn {
+    color: #d29922;
+}
+
+.vanity-kinds {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.vanity-kind {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 8px 10px;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #c9d1d9;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+}
+
+.vanity-kind strong {
+    font-size: 12.5px;
+    font-weight: 600;
+}
+
+.vanity-kind span {
+    color: #8b949e;
+    font-size: 11.5px;
+    line-height: 1.35;
+}
+
+.vanity-kind:hover {
+    border-color: #484f58;
+}
+
+.vanity-kind.active {
+    background: rgba(88, 166, 255, 0.10);
+    border-color: #58a6ff;
+    box-shadow: inset 0 0 0 1px #58a6ff;
+}
+
+.vanity-kind.active strong {
+    color: #58a6ff;
+}
+
+@media (max-width: 420px) {
+    .vanity-kinds {
+        grid-template-columns: 1fr;
+    }
+}
+
+.vanity-ideas {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.vanity-idea {
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    color: #c9d1d9;
+    padding: 2px 9px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.vanity-idea:hover {
+    border-color: #58a6ff;
+    color: #e6edf3;
+}
+
+.favorite-field-note .vanity-idea {
+    padding: 0 7px;
+    font-size: 11px;
+}
+
+.vanity-estimate {
+    min-height: 32px;
+    color: #8b949e;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.vanity-estimate strong {
+    color: #e6edf3;
+}
+
+.vanity-estimate.slow {
+    color: #d29922;
+}
+
+.vanity-target {
+    color: #c9d1d9;
+    font-size: 13px;
+    margin-bottom: 10px;
+}
+
+.vanity-prefix,
+.vanity-address strong {
+    color: #3fb950;
+}
+
+.vanity-bar {
+    height: 6px;
+    background: #21262d;
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 12px;
+}
+
+.vanity-bar-fill {
+    height: 100%;
+    width: 0;
+    background: #238636;
+    transition: width 0.4s ease;
+}
+
+.vanity-stats {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 14px;
+    font-size: 12px;
+    color: #8b949e;
+}
+
+.vanity-stats span:nth-child(even) {
+    color: #e6edf3;
+}
+
+.vanity-luck {
+    margin-top: 10px;
+}
+
+.vanity-address {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    padding: 8px 10px;
+    margin-bottom: 12px;
+    color: #c9d1d9;
+    font-size: 13px;
+    word-break: break-all;
+}
+
+.vanity-export-hint {
+    margin: -4px 0 10px 0;
+    font-size: 11px;
+}
+
+.vanity-error {
+    white-space: normal;
+}
+
+.vanity-found-button {
+    border-color: #238636 !important;
+    color: #3fb950 !important;
+}
+
+/* The search going on with the dialog closed: click to open it again. */
+.vanity-pill {
+    position: fixed;
+    left: 16px;
+    bottom: 60px;
+    z-index: 10000;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 14px;
+    color: #c9d1d9;
+    padding: 5px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.vanity-pill:hover {
+    border-color: #58a6ff;
+}
+
+.vanity-pill.found {
+    border-color: #238636;
+    color: #3fb950;
+}
+
+.vanity-pill.error {
+    border-color: #da3633;
+    color: #ff7b72;
 }
 
 /* A favorite added by hash alone, while its name is looked up. */
@@ -9566,6 +9962,52 @@ body.sidebar-collapsed .sidebar-toggle-btn {
     background: #d29922;
 }
 
+/* Restart / Shut down: at the foot of the categories column. */
+.settings-power {
+    display: flex;
+    gap: 6px;
+    margin-top: auto;
+    padding-top: 10px;
+    border-top: 1px solid #21262d;
+}
+
+.settings-power-btn {
+    flex: 1 1 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 7px 6px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #c9d1d9;
+    font: inherit;
+    font-size: 12px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s;
+}
+
+.settings-power-btn.restart svg { color: #d29922; }
+.settings-power-btn.shutdown svg { color: #f85149; }
+
+.settings-power-btn.restart:hover {
+    background: rgba(210, 153, 34, 0.12);
+    border-color: rgba(210, 153, 34, 0.6);
+    color: #e3b341;
+}
+
+.settings-power-btn.shutdown:hover {
+    background: rgba(248, 81, 73, 0.12);
+    border-color: rgba(248, 81, 73, 0.6);
+    color: #ff7b72;
+}
+
+.guest-mode .settings-power {
+    display: none;
+}
+
 .settings-dirty-note {
     margin-right: auto;
     align-self: center;
@@ -10248,14 +10690,18 @@ body.sidebar-collapsed .sidebar-toggle-btn {
 
 /* The bar: on the left what you look at (room and hub, topic, status and
    address), on the right who you are and the buttons. */
+/* The name and the hashes keep at least 260 px: with less room the buttons
+   go to the line below, and wrap there, instead of squeezing them into a
+   letter a line (a small window, the browser's tools open, a room's extra
+   buttons). */
 .rrc-head {
     align-items: center;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
 }
 
 .rrc-head-left {
-    flex: 1;
-    min-width: 0;
+    flex: 1 1 260px;
+    min-width: min(260px, 100%);
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -10290,6 +10736,7 @@ body.sidebar-collapsed .sidebar-toggle-btn {
 
 .rrc-head-right {
     flex: none;
+    max-width: 100%;
     display: flex;
     flex-direction: column;
     align-items: flex-end;
@@ -10298,6 +10745,7 @@ body.sidebar-collapsed .sidebar-toggle-btn {
 
 .rrc-head-right .bbs-head-actions {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 6px;
 }
@@ -10730,6 +11178,15 @@ body.sidebar-collapsed .sidebar-toggle-btn {
     padding: 0 4px;
 }
 
+/* The chat column narrow (ResizeObserver in rrc.js): the buttons as icons. */
+.rrc-main.rrc-tight .rrc-head .bar-iconized .bar-txt {
+    display: none;
+}
+
+.rrc-main.rrc-tight .rrc-head .bar-iconized .bar-ico {
+    display: inline-flex;
+}
+
 @media (max-width: 700px) {
     .rrc-head {
         flex-wrap: wrap;
@@ -10869,6 +11326,25 @@ body.sidebar-collapsed .sidebar-toggle-btn {
     flex: none;
     width: 16ch;
     color: #6e7681;
+}
+
+/* Settings > RRC Client: the times in the room windows (rrcApplyTimes in
+   rrc.js); the hub window keeps them in full. */
+@media (min-width: 701px) {
+    .rrc-ts-short .rrc-room-screen .rrc-ts {
+        width: 5ch;
+    }
+
+    .rrc-ts-short .rrc-room-screen .rrc-ts-x,
+    .rrc-ts-off-desktop .rrc-room-screen .rrc-ts {
+        display: none;
+    }
+}
+
+@media (max-width: 700px) {
+    .rrc-ts-off-mobile .rrc-room-screen .rrc-ts {
+        display: none;
+    }
 }
 
 .rrc-who {
@@ -12347,3 +12823,17 @@ body.app-window .content {
 .update-news ul { margin: 3px 0 0; padding-left: 18px; }
 .update-news li { margin: 3px 0; }
 .update-news code { font-size: 0.95em; }
+
+/* Phones: info, hide and star on a node card all the same size (the nav
+   bar's 44 px buttons and the browse buttons' rule made two of them big). */
+@media (max-width: 767px), (hover: none) and (pointer: coarse) {
+    .sidebar .node-item .node-actions button {
+        width: 32px !important;
+        height: 32px !important;
+        min-width: 32px !important;
+        max-width: 32px !important;
+        min-height: 32px !important;
+        max-height: 32px !important;
+        padding: 0 !important;
+    }
+}

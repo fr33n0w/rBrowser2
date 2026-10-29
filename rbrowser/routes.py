@@ -16,7 +16,7 @@ import os
 import re
 from typing import Any, Dict, Optional
 import RNS
-from . import rnsquiet
+from . import rnsquiet, vanity
 from flask import jsonify, render_template, request, send_file, send_from_directory, Response, abort
 import time
 import uuid
@@ -38,6 +38,29 @@ HASH_KIND_WAIT = 30
 # settings/ui_prefs.json: read, changed and written by one request at a time.
 _UI_PREFS_LOCK = threading.Lock()
 _UI_PREFS_PATH = os.path.join("settings", "ui_prefs.json")
+
+
+def _heard_counts(browser) -> dict:
+    """How many of each kind were heard, for the status bar: only the
+    clients that are on (one off listens to nothing). live = heard since
+    rBrowser started, known = what the client's list holds (also from
+    Reticulum's memory, or the saved file for the propagation nodes)."""
+    out = {}
+    msg = getattr(browser, "messenger", None)
+    if msg is not None and msg.settings.get("enabled") and getattr(msg.peers, "_registered", False):
+        out["lxmf"] = {"live": len(msg.peers.live), "known": len(msg.peers.peers)}
+        out["propagation"] = {"live": len(msg.pn.live), "known": len(msg.pn.nodes)}
+    rrc = getattr(browser, "rrc", None)
+    if rrc is not None and rrc.settings.get("enabled") and getattr(rrc, "_registered", False):
+        out["rrc"] = {"live": len(rrc.live), "known": len(rrc.heard)}
+    bbs = getattr(browser, "retibbs", None)
+    if bbs is not None and getattr(bbs, "_registered", False) and bbs.listening():
+        out["bbs"] = {"live": len(bbs.live), "known": len(bbs.heard)}
+    rmap = getattr(browser, "rmap", None)
+    nodes = rmap.count() if rmap is not None else None
+    if nodes is not None:
+        out["rmap"] = nodes
+    return out
 
 
 def _read_ui_prefs() -> dict:
@@ -123,7 +146,7 @@ def register_routes(app, browser) -> None:
         except ValueError:
             public = False
         if public and (auth is None or not auth.data["enabled"]):
-            return "rBrowser: from the internet only with the access password on (Settings > System)", 403
+            return "rBrowser: from the internet only with the access password on (Settings > System Setup)", 403
         # DNS rebinding: evil.site resolving to 127.0.0.1 would be "the same
         # site" as the page and could read everything, keys included.
         if not _trusted_host(_host_name(request.host)):
@@ -333,7 +356,8 @@ def register_routes(app, browser) -> None:
         return jsonify(
             {
                 "running": browser.running,
-                "total_announces": browser.announce_count,
+                # Every kind, not only NomadNet's (announce_count, the list's own).
+                "total_announces": browser.announces.count,
                 "unique_nodes": len(browser.nomadnet_nodes),
                 "identity_hash": RNS.prettyhexrep(browser.identity.hash)
                 if browser.identity
@@ -345,6 +369,9 @@ def register_routes(app, browser) -> None:
                 # the page knows to reload the list.
                 "favorites_revision": browser.favorites.revision,
                 "open_links": open_links,
+                "heard": _heard_counts(browser),
+                # rbrowser/rnswatch.py: Reticulum's interfaces to the network, up / all.
+                "interfaces": {k: v for k, v in browser.rnswatch.status().items() if k != "rns_offline_for"},
             }
         )
 
@@ -772,6 +799,70 @@ def register_routes(app, browser) -> None:
         return _identity_action(lambda: {"migrated": browser.identities.migrate_nodes(
             payload.get("nodes"), None if auto is None else bool(auto))})
 
+    # Vanity address: an identity whose LXMF address starts with chosen
+    # characters - see rbrowser/vanity.py. The key found never comes here:
+    # only its address, until Save makes it an identity on disk.
+
+    def _vanity_action(action):
+        try:
+            action()
+        except ValueError as exc:
+            return jsonify({"status": "error", "error": str(exc)}), 400
+        except Exception as exc:
+            print(f"❌ Vanity search: {exc}")
+            return jsonify({"status": "error", "error": str(exc)}), 500
+        return jsonify(dict(vanity.search.snapshot(), status="success"))
+
+    @app.route("/api/vanity")
+    def api_vanity():
+        return jsonify(dict(vanity.search.snapshot(), status="success"))
+
+    @app.route("/api/vanity/estimate", methods=["POST"])
+    def api_vanity_estimate():
+        payload = request.get_json(silent=True) or {}
+        try:
+            return jsonify(dict(vanity.search.estimate(payload.get("prefix")), status="success"))
+        except ValueError as exc:
+            return jsonify({"status": "error", "error": str(exc)}), 400
+
+    @app.route("/api/vanity/start", methods=["POST"])
+    def api_vanity_start():
+        payload = request.get_json(silent=True) or {}
+        return _vanity_action(lambda: vanity.search.start(payload.get("prefix"), payload.get("kind"),
+                                                          payload.get("position")))
+
+    @app.route("/api/vanity/stop", methods=["POST"])
+    def api_vanity_stop():
+        return _vanity_action(vanity.search.stop)
+
+    @app.route("/api/vanity/export")
+    def api_vanity_export():
+        """The key found as a file, the same file Settings > Export gives,
+        without saving it here: for an identity meant for another rBrowser
+        (or NomadNet, MeshChat, Sideband). The result stays in the dialog."""
+        try:
+            key = vanity.search.take_key()
+        except ValueError as exc:
+            return jsonify({"status": "error", "error": str(exc)}), 404
+        tag = ("id_" if vanity.search.kind == "identity" else "") + ("end_" if vanity.search.position == "end" else "")
+        return send_file(io.BytesIO(key), mimetype="application/octet-stream", as_attachment=True,
+                         download_name=f"rbrowser_identity_vanity_{tag}{vanity.search.prefix}")
+
+    @app.route("/api/vanity/save", methods=["POST"])
+    def api_vanity_save():
+        payload = request.get_json(silent=True) or {}
+
+        def save():
+            key = vanity.search.take_key()
+            profile = browser.identities.import_profile(
+                key, payload.get("name") or (f"Vanity {'ID ' if vanity.search.kind == 'identity' else ''}"
+                                             f"{'…' if vanity.search.position == 'end' else ''}{vanity.search.prefix}"))
+            vanity.search.discard()
+            if payload.get("activate"):
+                browser.switch_identity(profile["id"])
+            return {"created": profile["id"]}
+        return _identity_action(save)
+
     # ---------------------------------------------------------------- #
     # Server options (the command line ones) and restart               #
     # ---------------------------------------------------------------- #
@@ -845,7 +936,7 @@ def register_routes(app, browser) -> None:
 
     @app.route("/api/netwatch", methods=["GET", "POST"])
     def api_netwatch():
-        """Settings > System > Internet check (rbrowser/netwatch.py)."""
+        """Settings > System Setup > Internet check (rbrowser/netwatch.py)."""
         watch = getattr(browser, "netwatch", None)
         if watch is None:
             return jsonify({"status": "error", "error": "Not available"}), 500
@@ -853,6 +944,15 @@ def register_routes(app, browser) -> None:
             res = watch.update(request.get_json(silent=True) or {})
             return jsonify(res), (200 if res.get("status") == "success" else 400)
         return jsonify({"status": "success", **watch.settings(), **watch.status()})
+
+    @app.route("/api/netwatch/test", methods=["POST"])
+    def api_netwatch_test():
+        """The Test button: are the servers in the box answering? (Not for
+        guests: like every write, auth.guest_blocked.)"""
+        from .netwatch import test_servers
+        incoming = request.get_json(silent=True) or {}
+        res = test_servers(str(incoming.get("method") or ""), incoming.get("servers"))
+        return jsonify(res), (200 if res.get("status") == "success" else 400)
 
     @app.route("/api/console-settings", methods=["GET", "POST"])
     def api_console_settings():
@@ -923,7 +1023,7 @@ def register_routes(app, browser) -> None:
 
     @app.route("/api/sounds", methods=["GET", "POST"])
     def api_sounds():
-        """Settings > System > Sounds, kept in settings/sounds.json so every
+        """Settings > System Setup > Sounds, kept in settings/sounds.json so every
         port and address of this rBrowser sees the same choice (localStorage
         is per origin: :5000 and :5099 did not share it)."""
         import json as _json
@@ -983,6 +1083,25 @@ def register_routes(app, browser) -> None:
         schedule_restart(host, port)
         return jsonify({"status": "success", "host": host, "port": port,
                         "instance": browser.start_time})
+
+    @app.route("/api/shutdown", methods=["POST"])
+    def api_shutdown():
+        """Stop rBrowser (Settings > Shut down, asked first). Refused where
+        whoever launched it would start it again anyway (Docker restarts
+        the container): it is stopped from there."""
+        from .server_settings import schedule_shutdown
+        settings = _server_settings()
+        if settings is None or not settings.can_restart():
+            return jsonify({"status": "error",
+                            "error": "rBrowser was not started with rBrowser.py (Docker or "
+                                     "waitress-serve): stop it from there."}), 409
+        print("⏻ Shutdown requested from the page")
+        try:
+            browser.rrc.close_all()
+        except Exception:
+            pass
+        schedule_shutdown()
+        return jsonify({"status": "success"})
 
     @app.route("/api/link-quality/<node_hash>")
     def api_link_quality(node_hash):
@@ -1238,10 +1357,16 @@ def register_routes(app, browser) -> None:
         if not reticulum_ready:
             return jsonify({"status": "waiting", "message": "Reticulum not ready...", "color": "yellow"})
 
+        # rbrowser/rnswatch.py: every interface to the network is down (no
+        # coverage, no Wi-Fi) while Reticulum itself still answers.
+        if status_data.get("rns_ifaces_total") and not status_data.get("rns_ifaces_online"):
+            return jsonify({"status": "offline", "color": "red",
+                            "message": "Reticulum interface disconnected, reconnecting..."})
+
         # rbrowser/netwatch.py: Reticulum still says connected while the
         # line is dead, so this comes before its states.
         if status_data.get("internet") == "down":
-            return jsonify({"status": "offline", "message": "Disconnected from the network, waiting for reconnect...",
+            return jsonify({"status": "offline", "message": "No internet connection, waiting for reconnect...",
                             "color": "red"})
 
         if connection_state == "connected":

@@ -1,5 +1,5 @@
 """
-Access password for the web UI (Settings > System > Access password).
+Access password for the web UI (Settings > System Setup > Access password).
 
 rBrowser listens on the LAN (0.0.0.0) so a phone can use it; on a network
 that is not yours that means anyone there could open it, read the messages
@@ -190,7 +190,7 @@ class Auth:
                           "has_password": bool(self.data["guest_hash"]), **self.guest_rights()}}
 
     def update(self, incoming: Dict[str, Any], address: str) -> Dict[str, Any]:
-        """Settings > System > Access password. With a password set, the
+        """Settings > System Setup > Access password. With a password set, the
         current one is needed for any change (a session alone is not enough:
         a browser left open must not let someone lock the owner out)."""
         if self.data["hash"] and not self.check_password(incoming.get("current"), address):

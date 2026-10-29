@@ -1,5 +1,5 @@
 """
-Remote access (Settings > System > Remote access).
+Remote access (Settings > System Setup > Remote access).
 
 Two independent pieces:
 

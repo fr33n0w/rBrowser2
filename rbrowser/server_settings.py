@@ -301,6 +301,23 @@ def _save_rns_state() -> None:
             pass
 
 
+def _say_goodbye() -> None:
+    """Before this process goes away: the .local name is withdrawn from the
+    network, and the tunnel stopped (os._exit would leave cloudflared
+    running on its own)."""
+    try:
+        from .mdns import local_name as announcer
+        announcer.stop()
+    except Exception:
+        pass
+    try:
+        from . import remote
+        if remote.current:
+            remote.current.shutdown()
+    except Exception:
+        pass
+
+
 def restart_mode(under_systemd: bool, os_name: str = os.name) -> str:
     """How this process starts its successor.
     "systemd": exit with SYSTEMD_RESTART_CODE, systemd starts it again.
@@ -324,25 +341,12 @@ def schedule_restart(host: str, port: int, delay: float = 1.0) -> List[str]:
 
     def _go() -> None:
         time.sleep(delay)
-        print("=" * 90)
+        print()
         print(f"🔄 Restarting rBrowser on {host}:{port} ...")
-        print("=" * 90)
         env = dict(os.environ)
         env[WAIT_PID_ENV] = str(os.getpid())
-        # Say goodbye to the network: the new process announces the name again.
-        try:
-            from .mdns import local_name as announcer
-            announcer.stop()
-        except Exception:
-            pass
-        # The tunnel too: the new process starts its own (os._exit below
-        # would leave cloudflared running on its own).
-        try:
-            from . import remote
-            if remote.current:
-                remote.current.shutdown()
-        except Exception:
-            pass
+        # The new process announces the name and starts its tunnel again.
+        _say_goodbye()
 
         # As a systemd service (install.sh: Restart=on-failure) the new process
         # must not be started from here: a clean exit stops the unit and
@@ -388,6 +392,30 @@ def schedule_restart(host: str, port: int, delay: float = 1.0) -> List[str]:
     return command
 
 
+def schedule_shutdown(delay: float = 1.0) -> None:
+    """
+    Stop rBrowser after `delay` seconds (time for the HTTP answer to reach
+    the page). Exit code 0: a systemd service (Restart=on-failure) stays
+    stopped instead of coming back.
+    """
+    def _go() -> None:
+        time.sleep(delay)
+        print()
+        print("⏻ rBrowser shut down from the page.")
+        _say_goodbye()
+        closer = threading.Thread(target=_save_rns_state, daemon=True)
+        closer.start()
+        closer.join(timeout=5)
+        for stream in (sys.__stdout__, sys.__stderr__):
+            try:
+                stream.flush()
+            except Exception:
+                pass
+        os._exit(0)
+
+    threading.Thread(target=_go, name="rbrowser-shutdown", daemon=True).start()
+
+
 def _spawn(command: List[str], env: Dict[str, str]) -> None:
     """Start the new rBrowser on the same console / output as this one."""
     # The output handles are passed explicitly. Left implicit, Windows only
@@ -419,6 +447,6 @@ def _spawn(command: List[str], env: Dict[str, str]) -> None:
             pass
     subprocess.Popen(command, **kwargs)
 
-__all__ = ["ServerSettings", "restart_command", "schedule_restart",
+__all__ = ["ServerSettings", "restart_command", "schedule_restart", "schedule_shutdown",
            "wait_for_previous_instance", "valid_host", "valid_port",
            "DEFAULT_HOST", "DEFAULT_PORT"]

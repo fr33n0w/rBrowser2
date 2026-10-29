@@ -51,6 +51,9 @@ class LxmfPeers:
         self.browser = browser
         self.lock = threading.Lock()
         self.peers: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        # Heard live since rBrowser started (not the prefill from Reticulum's
+        # memory, not an answer to a path request): the status bar's number.
+        self.live: set = set()
         self._registered = False
         self.revision = 0
 
@@ -85,6 +88,8 @@ class LxmfPeers:
                           app_data: Optional[bytes], *args: Any, **kwargs: Any) -> None:
         if announced_identity is None:
             return
+        if not kwargs.get("is_path_response"):
+            self.live.add(destination_hash.hex())
         self._add(destination_hash, announced_identity, app_data, time.time())
 
     def prefill(self) -> None:

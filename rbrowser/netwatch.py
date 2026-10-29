@@ -1,11 +1,14 @@
 """
-Settings > System > Internet check (off by default). Reticulum keeps saying
+Settings > System Setup > Internet check (off by default). Reticulum keeps saying
 "connected" while the line behind the router is dead: its TCP interfaces
 notice late, and RRC later still. When switched on, every PROBE_EVERY seconds
-a TCP connection is opened to the hosts the user chose (nothing sent, closed
-at once); one answering is enough. Down after DOWN_AFTER failed rounds in a
-row, up again at the first answer. Each change is one line in the terminal,
-and the status bar and a notification in the page show it.
+either a time server is asked the time (NTP: one 48-byte UDP packet, the
+default - a time server keeps no profile of who asks) or a TCP connection is
+opened to the hosts the user chose (nothing sent, closed at once); one
+answering is enough. Down after DOWN_AFTER failed rounds in a row, up again
+at the first answer. Each change is one line in the terminal, and the status
+bar and a notification in the page show it. Reticulum's own interfaces are
+watched apart, always (rnswatch.py).
 Off, nothing is contacted at all. Kept in settings/netwatch.json.
 
 While it is down, what goes to the internet by itself waits instead of
@@ -30,6 +33,9 @@ SETTINGS_FILE = os.path.join("settings", "netwatch.json")
 # Only a suggestion shown in Settings: nothing is contacted until the user
 # switches the check on, and any host can be put there instead.
 DEFAULT_HOSTS = "1.1.1.1:443, 9.9.9.9:443"
+DEFAULT_TIME_SERVERS = "pool.ntp.org"
+METHODS = ("ntp", "tcp")
+NTP_PORT = 123
 PROBE_EVERY = 15.0
 PROBE_TIMEOUT = 4.0
 DOWN_AFTER = 2
@@ -38,13 +44,13 @@ MAX_HOSTS = 4
 _HOST_RE = re.compile(r"^[A-Za-z0-9.\-]{1,253}$|^\[[0-9A-Fa-f:.]{2,45}\]$")
 
 
-def parse_hosts(text: Any) -> List[Tuple[str, int]]:
-    """"host:port, host:port" (port 443 when left out). Raises ValueError."""
+def parse_hosts(text: Any, default_port: int = 443) -> List[Tuple[str, int]]:
+    """"host:port, host:port" (default_port when left out). Raises ValueError."""
     out: List[Tuple[str, int]] = []
     for part in re.split(r"[,\s]+", str(text or "").strip()):
         if not part:
             continue
-        host, port = part, 443
+        host, port = part, default_port
         m = re.match(r"^(\[[^\]]+\]|[^:]+)(?::(\d{1,5}))?$", part)
         if not m:
             raise ValueError(f"Not a host: {part}")
@@ -85,6 +91,55 @@ def reachable(probes: List[Tuple[str, int]], timeout: float = PROBE_TIMEOUT) -> 
     return False
 
 
+def time_server_answers(probes: List[Tuple[str, int]], timeout: float = PROBE_TIMEOUT) -> bool:
+    """An SNTP request (RFC 4330: version 4, mode client) to each in turn; a
+    reply in server mode from one is enough."""
+    request = b"\x23" + bytes(47)
+    for host, port in probes:
+        try:
+            for family, kind, proto, _name, addr in socket.getaddrinfo(host, port, type=socket.SOCK_DGRAM):
+                with socket.socket(family, kind, proto) as sock:
+                    sock.settimeout(timeout)
+                    sock.sendto(request, addr)
+                    reply, _ = sock.recvfrom(512)
+                    if len(reply) >= 48 and reply[0] & 0x07 == 4:
+                        return True
+        except OSError:
+            continue
+    return False
+
+
+def test_servers(method: str, text: Any) -> Dict[str, Any]:
+    """Settings > Internet check > Test: each server of the list asked once
+    (at the same time), with how long it took. The list is the one in the
+    box, saved or not."""
+    if method not in METHODS:
+        return {"status": "error", "error": "Pick a time server or hosts"}
+    try:
+        servers = parse_hosts(text, NTP_PORT if method == "ntp" else 443)
+    except ValueError as exc:
+        return {"status": "error", "error": str(exc)}
+    ask = time_server_answers if method == "ntp" else reachable
+    results: List[Dict[str, Any]] = [{} for _ in servers]
+
+    def one(i: int, host: str, port: int) -> None:
+        start = time.monotonic()
+        ok = ask([(host, port)])
+        results[i] = {"server": _hosts_text([(host, port)]), "ok": ok,
+                      "ms": round((time.monotonic() - start) * 1000)}
+
+    threads = [threading.Thread(target=one, args=(i, h, p), daemon=True) for i, (h, p) in enumerate(servers)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(PROBE_TIMEOUT * 3)
+    return {"status": "success", "results": results}
+
+
+def _hosts_text(hosts: List[Tuple[str, int]]) -> str:
+    return ", ".join(f"[{h}]:{p}" if ":" in h else f"{h}:{p}" for h, p in hosts)
+
+
 def _took(seconds: float) -> str:
     seconds = int(seconds)
     if seconds < 60:
@@ -100,13 +155,16 @@ class NetWatch:
                  every: float = PROBE_EVERY, down_after: int = DOWN_AFTER,
                  clock: Callable[[], float] = time.time) -> None:
         self.path = path
-        self.probe = probe or reachable
+        self.probe = probe          # None: by the method chosen
         self.every = every
         self.down_after = down_after
         self.clock = clock
         self.enabled = False
         self.hosts_text = DEFAULT_HOSTS
         self.hosts = parse_hosts(DEFAULT_HOSTS)
+        self.method = "ntp"
+        self.time_text = DEFAULT_TIME_SERVERS
+        self.time_servers = parse_hosts(DEFAULT_TIME_SERVERS, NTP_PORT)
         self.state = "off"              # "unknown", "up", "down" once on
         self.since: Optional[float] = None
         self.fails = 0
@@ -126,25 +184,40 @@ class NetWatch:
             hosts_text = str(saved.get("hosts") or DEFAULT_HOSTS)
             self.hosts = parse_hosts(hosts_text)
             self.hosts_text = hosts_text
+            time_text = str(saved.get("time_servers") or DEFAULT_TIME_SERVERS)
+            self.time_servers = parse_hosts(time_text, NTP_PORT)
+            self.time_text = time_text
+            # A file from before the time servers: it checked hosts.
+            self.method = saved.get("method") if saved.get("method") in METHODS else "tcp"
             self.enabled = saved.get("enabled") is True
         except (OSError, ValueError, AttributeError):
             pass
         self.state = "unknown" if self.enabled else "off"
 
     def settings(self) -> Dict[str, Any]:
-        return {"enabled": self.enabled, "hosts": self.hosts_text, "default_hosts": DEFAULT_HOSTS}
+        return {"enabled": self.enabled, "method": self.method, "hosts": self.hosts_text,
+                "time_servers": self.time_text, "default_hosts": DEFAULT_HOSTS,
+                "default_time_servers": DEFAULT_TIME_SERVERS}
+
+    def describe(self) -> str:
+        return (f"time server {self.time_text}" if self.method == "ntp" else f"hosts {self.hosts_text}")
 
     def update(self, incoming: Dict[str, Any]) -> Dict[str, Any]:
         enabled = incoming.get("enabled", self.enabled) is True
+        method = incoming.get("method", self.method)
+        if method not in METHODS:
+            return {"status": "error", "error": "Pick a time server or hosts"}
         hosts_text = str(incoming.get("hosts", self.hosts_text) or "").strip()
+        time_text = str(incoming.get("time_servers", self.time_text) or "").strip()
         try:
             hosts = parse_hosts(hosts_text)
+            time_servers = parse_hosts(time_text, NTP_PORT)
         except ValueError as exc:
             return {"status": "error", "error": str(exc)}
         with self._lock:
             was = self.enabled
-            self.enabled, self.hosts, self.hosts_text = enabled, hosts, ", ".join(
-                f"[{h}]:{p}" if ":" in h else f"{h}:{p}" for h, p in hosts)
+            self.enabled, self.hosts, self.hosts_text = enabled, hosts, _hosts_text(hosts)
+            self.method, self.time_servers, self.time_text = method, time_servers, _hosts_text(time_servers)
             if not enabled:
                 self.state, self.since, self.fails = "off", None, 0
             elif not was:
@@ -153,11 +226,12 @@ class NetWatch:
         if self.path:
             try:
                 from .fileio import atomic_write_json
-                atomic_write_json(self.path, {"enabled": self.enabled, "hosts": self.hosts_text})
+                atomic_write_json(self.path, {"enabled": self.enabled, "method": self.method,
+                                              "hosts": self.hosts_text, "time_servers": self.time_text})
             except OSError as exc:
                 return {"status": "error", "error": f"Could not save it: {exc}"}
         if enabled and not was:
-            print(f"🔗 Internet check on: {self.hosts_text}")
+            print(f"🔗 Internet check on: {self.describe()}")
         elif was and not enabled:
             print("🔗 Internet check off")
         if woke:
@@ -177,8 +251,9 @@ class NetWatch:
         with self._lock:
             if not self.enabled:
                 return self.state
-            hosts = list(self.hosts)
-        ok = self.probe(hosts)
+            hosts = list(self.time_servers if self.method == "ntp" else self.hosts)
+            probe = self.probe or (time_server_answers if self.method == "ntp" else reachable)
+        ok = probe(hosts)
         now = self.clock()
         changed = None
         with self._lock:
@@ -194,7 +269,7 @@ class NetWatch:
             else:
                 self.fails += 1
                 if self.fails >= self.down_after and self.state != "down":
-                    print("⚠️ Disconnected from the network, waiting for reconnect...")
+                    print(f"⚠️ No internet connection ({self.describe()} not answering), waiting for reconnect...")
                     self.state, self.since = "down", now
                     changed = False
             state = self.state
@@ -230,4 +305,5 @@ class NetWatch:
         self._thread.start()
 
 
-__all__ = ["NetWatch", "parse_hosts", "reachable", "offline", "on_change", "DEFAULT_HOSTS"]
+__all__ = ["NetWatch", "parse_hosts", "reachable", "time_server_answers", "test_servers", "offline", "on_change",
+           "DEFAULT_HOSTS", "DEFAULT_TIME_SERVERS"]

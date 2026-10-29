@@ -13,13 +13,26 @@
          light and inverts their colours - which is why the interface came
          out with its palette flipped on a phone but not on a desktop. -->
     <meta name="color-scheme" content="dark">
-    <title>rBrowser v2.0.4b - Standalone Reticulum Browser</title>
+    <title>rBrowser v2.0.5b - Standalone Reticulum Browser</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <!-- Absolute paths: the page is also served at /<hash>:/page/x.mu, where
          a relative path resolves under that URL and gets this page back. -->
     <link rel="stylesheet" href="/style.css">
 </head>
-<body>
+<body class="{{ 'sb-bottom' if ui_prefs.get('rbrowser_statusbar_pos') == 'bottom' else 'sb-top' }}">
+    <!-- One line across the whole window, whichever client is open: at the
+         top or at the bottom (Settings > System Setup, the class on <body>). Icons,
+         their names on hover; CPU and RAM, then the clock, at the right end. -->
+    <div class="status-bar" id="status-bar" title="Connection status, announces received and what was heard">
+        <div class="sb-row"><span class="sb-label sb-status-label">Status:</span><span class="status-indicator" id="connection-status"><span class="sb-dot"></span><span class="sb-text">Initializing...</span></span></div>
+        <div class="sb-row sb-stats">
+            <span class="sb-stat" title="Total announces: of every kind, received since rBrowser started"><span class="sb-ico"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M8 9v5.5M5.5 14.5h5"/><circle cx="8" cy="7.5" r="1.3"/><path d="M5.2 4.8a4 4 0 0 0 0 5.4M10.8 4.8a4 4 0 0 1 0 5.4M3.2 2.8a6.8 6.8 0 0 0 0 9.4M12.8 2.8a6.8 6.8 0 0 1 0 9.4"/></svg></span><span class="sb-label">Total announces:</span><span class="count" id="announce-count">0</span></span>
+            <span class="sb-stat" title="NomadNet nodes: in the node list"><span class="sb-ico"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2.5" width="12" height="9" rx="1"/><path d="M5 14h6M4.5 5.5h4M4.5 8h6"/></svg></span><span class="sb-label">NomadNet nodes:</span><span class="count" id="node-count">0</span></span>
+            <span class="sb-heard" id="sb-heard"></span>
+        </div>
+        <div class="sb-row sb-usage-row"><span class="sb-usage" id="sb-usage" hidden></span></div>
+        <div class="sb-row sb-clock-row"><span class="sb-clock" id="sb-clock" title="Local time"></span></div>
+    </div>
     <div class="main">
         <div class="sidebar" style="position: relative;">
             <!-- The three rows above the list line up with the three on the
@@ -66,13 +79,13 @@
                         <circle cx="11" cy="11" r="7"></circle>
                         <line x1="16.5" y1="16.5" x2="21" y2="21"></line>
                     </svg>
-                    <input type="text" class="node-search" id="node-search" placeholder="Search nodes, favorites, saved pages..." autocomplete="off" oninput="toggleClearButton(); filterNodes()">
+                    <input type="text" class="node-search" id="node-search" aria-label="Search nodes" placeholder="Search nodes, favorites, saved pages..." autocomplete="off" oninput="toggleClearButton(); filterNodes()">
                     <button class="search-clear" id="search-clear" onclick="clearSearch()" style="display: none;" title="Clear the search">×</button>
                 </div>
             </div>
             <div class="sort-container">
                 <label class="sort-label" for="node-sort">Sort</label>
-                <select id="node-sort" onchange="sortAndFilterNodes()">
+                <select aria-label="Sort nodes" id="node-sort" onchange="sortAndFilterNodes()">
                     <option value="original">Original Order (Announce Time)</option>
                     <option value="recent">Most Recent First</option>
                     <option value="frequent">Most Announced First</option>
@@ -80,30 +93,19 @@
                     <option value="alphabetical">Alphabetical (A-Z)</option>
                 </select>
             </div>
-            <div class="node-list-container" style="position: absolute !important; top: 158px !important; bottom: 52px !important; left: 0 !important; right: 0 !important; overflow-y: auto !important;">
+            <div class="node-list-container" style="position: absolute !important; top: 158px !important; bottom: 0 !important; left: 0 !important; right: 0 !important; overflow-y: auto !important;">
                 <div class="node-list" id="node-list">
                     <div class="node-list-empty" style="text-align: center; padding: 20px; color: #d2d7df; font-size: 12px;">Scanning for nodes...</div>
                 </div>
             </div>
             <div class="sidebar-resizer" title="Drag to resize the list - double-click to hide it"></div>
-            <div class="status-bar" style="position: absolute !important; bottom: 0 !important; left: 0 !important; right: 0 !important; margin: 0 !important; height: 52px !important; min-height: 52px !important; max-height: 52px !important; box-sizing: border-box !important; white-space: nowrap; overflow: hidden;"
-                 title="Connection status, announces received and NomadNet nodes heard">
-                <!-- Three lines in a 52px bar (the third: CPU/RAM): kept short and unwrapped. The old
-                     wording wrapped to three lines and the last one was cut. -->
-                <div class="sb-row"><span class="sb-label">Status:</span><span class="status-indicator" id="connection-status"><span class="sb-dot"></span><span class="sb-text">Initializing...</span></span></div>
-                <div class="sb-row sb-stats">
-                    <span class="sb-stat" title="Announces received since rBrowser started"><span class="sb-label"><span class="sb-long">Total announces</span><span class="sb-short">Announces</span>:</span><span class="count" id="announce-count">0</span></span>
-                    <span class="sb-stat" title="NomadNet nodes in the list"><span class="sb-label">NomadNet<span class="sb-long"> nodes</span>:</span><span class="count" id="node-count">0</span></span>
-                </div>
-                <div class="sb-row sb-usage-row"><span class="sb-usage" id="sb-usage" hidden></span></div>
-            </div>
         </div>
             <div class="content">
             <div class="tab-bar">
                 <div class="tabs-container" id="tabs-container">
                     <!-- The new-tab control is a tab itself, right after the
                          page tabs (created dynamically before it); then the
-                         app tabs, then Settings (desktop only). -->
+                         app tabs, then Settings. -->
                     <div class="tab tab-new" id="new-tab-control" onclick="createNewTab()"
                          title="Open a new tab">+</div>
                     <div class="tab tab-new tab-gear" id="tab-bar-settings" onclick="showSettings()"
@@ -147,7 +149,7 @@
             <!-- Where the page on screen came from: live, cache or an
                  offline copy. Filled by setPageSource(). -->
             <button class="source-pill" hidden onclick="sourcePillClick(this)"></button>
-            <input type="text" class="address-bar" id="address-bar" placeholder="hash:/page/index.mu - or type a name to search" autocomplete="off" spellcheck="false" onkeypress="handleAddressBarEnter(event)">
+            <input type="text" class="address-bar" id="address-bar" aria-label="Address" placeholder="hash:/page/index.mu - or type a name to search" autocomplete="off" spellcheck="false" onkeypress="handleAddressBarEnter(event)">
             <button class="go-btn" onclick="navigateToUrl()" title="Navigate to current url page"><img src="/templates/go.png" alt="" style="width: 19px; height: 19px; vertical-align: middle;"></button>
             <button class="star-btn" onclick="addCurrentPageToFavorites()" title="Add current page to favorites"><img src="/templates/star.png" alt="" style="width: 21px; height: 21px; vertical-align: middle;"></button>
             <button class="info-btn-nav" onclick="showCurrentNodeInfo()" title="Show current node info"><img src="/templates/info.png" alt="Info" style="width: 20px; height: 20px; vertical-align: middle;"></button>
@@ -254,7 +256,7 @@
                 <!-- The same look as the clients' empty pages (clientWelcome). -->
                 <div class="welcome">
                     <div class="client-welcome">
-                        <h2 class="rb-version">rBrowser v2.0.4b</h2>
+                        <h2 class="rb-version">rBrowser v2.0.5b</h2>
                         <span class="bbs-title"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor"
                             stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 4h8M5.5 8h8M5.5 12h8"/><circle cx="2.5" cy="4" r=".8"/><circle cx="2.5" cy="8" r=".8"/><circle cx="2.5" cy="12" r=".8"/></svg><span>NomadNet Browser</span></span>
                     </div>

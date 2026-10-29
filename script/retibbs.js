@@ -150,10 +150,10 @@ function ensureRetibbsTab() {
                     <button class="msg-close" onclick="closeRetibbs()" title="Close the BBS client" aria-label="Close">&times;</button>
                 </div>
                 <div class="bbs-connect">
-                    <input type="text" id="bbs-address" class="msg-search" placeholder="Server address (32 hex)" spellcheck="false" autocomplete="off">
+                    <input aria-label="Server address" type="text" id="bbs-address" class="msg-search" placeholder="Server address (32 hex)" spellcheck="false" autocomplete="off">
                     <button class="msg-bar-btn primary" id="bbs-address-go">Connect</button>
                 </div>
-                <input type="text" id="bbs-filter" class="msg-search bbs-filter" placeholder="Search servers" spellcheck="false" autocomplete="off">
+                <input aria-label="Search servers" type="text" id="bbs-filter" class="msg-search bbs-filter" placeholder="Search servers" spellcheck="false" autocomplete="off">
                 <div class="bbs-identity" id="bbs-identity"></div>
                 <div class="bbs-servers" id="bbs-servers"><div class="msg-search-none">Listening for servers…</div></div>
             </div>
@@ -167,7 +167,7 @@ function ensureRetibbsTab() {
                 <div class="bbs-input-row" id="bbs-input-row" hidden>
                     <div class="rrc-cmds bbs-cmds" id="bbs-cmds" hidden role="listbox"></div>
                     <span class="bbs-prompt">&gt;</span>
-                    <input type="text" id="bbs-input" class="bbs-input" spellcheck="false" autocomplete="off"
+                    <input aria-label="Command" type="text" id="bbs-input" class="bbs-input" spellcheck="false" autocomplete="off"
                            placeholder="Command - ? for help, / or Tab lists the commands, ↑↓ earlier ones">
                     <button class="msg-send" id="bbs-send" title="Send (Enter)" aria-label="Send"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 8l11-5.5L9.5 14 7.5 9z" fill="currentColor"/></svg></button>
                 </div>
@@ -1025,11 +1025,26 @@ async function loadRetibbsSettings() {
     if (nomadProto) nomadProto.classList.toggle('active', !st.settings.protocols || st.settings.protocols.nomadnet !== false);
     const fx = document.getElementById('setting-bbs-fx');
     if (fx) fx.classList.toggle('active', !!st.settings.terminal_fx);
+    fillRetibbsIdentitySelect(st.identities, st.settings.identity);
+}
+
+function fillRetibbsIdentitySelect(identities, value) {
     const select = document.getElementById('setting-bbs-identity');
-    if (select) {
-        select.innerHTML = (st.identities || []).map(i => `<option value="${escapeHtml(i.id)}">${escapeHtml(i.name)}</option>`).join('');
-        select.value = st.settings.identity;
-    }
+    if (!select) return;
+    select.innerHTML = (identities || []).map(i => `<option value="${escapeHtml(i.id)}">${escapeHtml(i.name)}</option>`).join('');
+    select.value = value;
+}
+
+// The identity list changed with the dialog open: the choice shown stays.
+async function refreshRetibbsIdentityChoices() {
+    const select = document.getElementById('setting-bbs-identity');
+    if (!select) return;
+    let st;
+    try { st = await fetch('/api/retibbs').then(r => r.json()); } catch (e) { return; }
+    if (!st || !st.settings) return;
+    if (RetiBBS.state) RetiBBS.state.identities = st.identities;
+    const shown = select.value;
+    fillRetibbsIdentitySelect(st.identities, (st.identities || []).some(i => i.id === shown) ? shown : st.settings.identity);
 }
 
 function saveRetibbsSettings() {

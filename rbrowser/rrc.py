@@ -122,7 +122,7 @@ def cut_nick(value: Any, max_bytes: int = NICK_MAX) -> str:
 
 BOOL_SETTINGS = ("enabled", "show_joins", "reconnect", "autoconnect_all", "autoconnect_selected",
                  "nick_on",
-                 "rejoin_rooms", "compact_joins",
+                 "rejoin_rooms", "compact_joins", "room_ts_desktop", "room_ts_mobile", "room_ts_short", "autoclose_nodes",
                  "notices_to_hub", "show_auto",
                  "notify_mentions", "notify_messages", "notify_events", "autoreply_on", "echo_on", "away_notice",
                  "back_notice", "away_nick_on")
@@ -378,7 +378,16 @@ class RRC:
         "autoconnect_all": False,
         "autoconnect_selected": True,
         "rejoin_rooms": True,            # on connect, the rooms you were in last time
-        "compact_joins": True,
+        "compact_joins": False,
+        # The time before each line in the room windows (the hub tab always
+        # shows it in full, for the drops and modes): on or off on a computer
+        # and on a phone, and on a computer short (hh:mm) as on a phone.
+        "room_ts_desktop": True,
+        "room_ts_mobile": True,
+        "room_ts_short": False,
+        # In a window under 1200 px, opening RRC closes the node list (the
+        # button opens it again).
+        "autoclose_nodes": True,
         "highlight": "",
         "notify_mentions": True,
         "notify_messages": False,
@@ -425,6 +434,9 @@ class RRC:
         self.settings: Dict[str, Any] = json.loads(json.dumps(self.DEFAULTS))
         self._load()
         self.heard: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        # Heard live since rBrowser started (not the prefill from Reticulum's
+        # memory, not an answer to a path request): the status bar's number.
+        self.live: set = set()
         self.sessions: Dict[str, Hub] = {}
         self._registered = False
         self._rrc_identity: Optional[RNS.Identity] = None
@@ -855,6 +867,8 @@ class RRC:
             return
         name = hub_name(app_data)
         if name is not None:
+            if not kwargs.get("is_path_response"):
+                self.live.add(destination_hash.hex())
             self._heard(destination_hash.hex(), name, time.time())
 
     def prefill(self) -> None:

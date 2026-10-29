@@ -103,7 +103,7 @@ function ensureMessengerTab() {
                                     title="Clear the search (Esc)" aria-label="Clear the search">×</button>
                         </div>
                         <!-- The order of this list: here, where it acts. -->
-                        <select class="msg-sort" id="msg-sort" title="Order of the conversations">
+                        <select aria-label="Order of the conversations" class="msg-sort" id="msg-sort" title="Order of the conversations">
                             <option value="alphabetical">A-Z</option>
                             <option value="recent">Recent</option>
                             <option value="started">Started</option>
@@ -342,7 +342,7 @@ function openAvatarColors(peer, opts = {}) {
                 ${swatch('auto')}
                 ${AVATAR_HUES.map(h => swatch(h)).join('')}
             </div>
-            <input type="range" class="avatar-colors-slider" min="0" max="359" step="1" aria-label="Fine hue">
+            <input name="avatar-hue" type="range" class="avatar-colors-slider" min="0" max="359" step="1" aria-label="Fine hue">
             <div class="settings-hint">Kept in rBrowser: every device you open it from shows the same colour.
                 Only you see it.</div>
             <div class="auto-reload-actions">
@@ -818,7 +818,7 @@ async function renameContact(peer) {
             <div class="dialog-header"><h3>Rename contact</h3></div>
             <div class="settings-hint">Shown here only, instead of the announced name${announced ? ` <b>${escapeHtml(announced)}</b>` : ''}.
                 Empty: back to the announced name.</div>
-            <input class="settings-input msg-rename-input" type="text" maxlength="48" spellcheck="false"
+            <input name="msg-rename" aria-label="Nickname" class="settings-input msg-rename-input" type="text" maxlength="48" spellcheck="false"
                    value="${escapeHtml(current)}" placeholder="${escapeHtml(announced || 'Nickname')}">
             <code class="avatar-colors-addr">${escapeHtml(peer)}</code>
             <div class="auto-reload-actions">
@@ -1617,8 +1617,8 @@ async function renderChat(peer, scrollToEnd) {
         <div class="msg-attach" hidden></div>
         <div class="msg-compose">
             <button class="msg-clip" title="Attach files - or drop them on the chat, or paste an image" aria-label="Attach files">${CLIP_ICON}</button>
-            <input type="file" class="msg-file-input" multiple hidden>
-            <textarea class="msg-input" rows="1" placeholder="Message - Enter sends, Shift+Enter for a new line"></textarea>
+            <input name="msg-files" aria-label="Attach files" type="file" class="msg-file-input" multiple hidden>
+            <textarea name="msg-input" aria-label="Message" class="msg-input" rows="1" placeholder="Message - Enter sends, Shift+Enter for a new line"></textarea>
             <button class="msg-via-pn" hidden title="Send straight to the propagation node, without trying direct delivery (useful for tests). Click to switch on or off" aria-label="Send via the propagation node">📮</button>
             <button class="msg-send" title="Send (Enter)" aria-label="Send"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 8l11-5.5L9.5 14 7.5 9z" fill="currentColor"/></svg></button>
         </div>`;
@@ -2150,7 +2150,7 @@ function showReactionPicker(anchor, peer, id) {
     const picker = document.createElement('div');
     picker.className = 'msg-react-picker';
     picker.innerHTML = quick.map(e => `<button data-emoji="${escapeHtml(e)}">${escapeHtml(e)}</button>`).join('')
-        + '<input type="text" maxlength="8" placeholder="+" title="Any other emoji, then Enter" aria-label="Other emoji">';
+        + '<input name="msg-other-emoji" type="text" maxlength="8" placeholder="+" title="Any other emoji, then Enter" aria-label="Other emoji">';
     document.body.appendChild(picker);
     const r = anchor.getBoundingClientRect();
     const w = picker.offsetWidth, h = picker.offsetHeight;
@@ -2636,7 +2636,7 @@ function confirmEphemeralSend() {
             <div class="settings-hint">You are writing as a throwaway identity. It changes
                 <b>${escapeHtml(ephemeralChangeText(st))}</b>: replies that arrive after that are lost,
                 and nobody can write to this address again.</div>
-            <label class="cache-search-exact"><input type="checkbox" class="msg-warn-session"> don't ask again until the page is reloaded</label>
+            <label class="cache-search-exact"><input name="msg-warn-session" type="checkbox" class="msg-warn-session"> don't ask again until the page is reloaded</label>
             <div class="auto-reload-actions">
                 <button class="btn-cancel">Cancel</button>
                 <button class="btn-save">Send</button>
@@ -2851,7 +2851,7 @@ function pickRecipient(skip, cardName) {
         overlay.className = 'auto-reload-modal';
         overlay.innerHTML = `<div class="auto-reload-dialog msg-warn-dialog send-addr-dialog">
             <div class="dialog-header"><h3>Send address of ${escapeHtml(cardName || skip.slice(0, 8) + '…')} to…</h3></div>
-            <input class="settings-input send-addr-search" type="text" spellcheck="false"
+            <input name="send-addr-search" aria-label="Search contacts" class="settings-input send-addr-search" type="text" spellcheck="false"
                    placeholder="Search contacts and peers, or paste an LXMF address">
             <div class="send-addr-list"></div>
             <div class="auto-reload-actions"><button class="btn-cancel">Cancel</button></div></div>`;
@@ -2992,9 +2992,9 @@ async function messengerAddContact(prefill = '') {
         overlay.className = 'auto-reload-modal';
         overlay.innerHTML = `<div class="auto-reload-dialog msg-warn-dialog">
             <div class="dialog-header"><h3>Add contact</h3></div>
-            <input class="settings-input msg-rename-input msg-contact-address" type="text" spellcheck="false"
+            <input name="contact-address" aria-label="Contact address" class="settings-input msg-rename-input msg-contact-address" type="text" spellcheck="false"
                    placeholder="LXMF address (32 hex characters)" value="${escapeHtml(prefill)}">
-            <input class="settings-input msg-rename-input msg-contact-nick" type="text" maxlength="48" spellcheck="false"
+            <input name="contact-nick" aria-label="Contact nickname" class="settings-input msg-rename-input msg-contact-nick" type="text" maxlength="48" spellcheck="false"
                    placeholder="Name (optional, shown instead of the announced one)">
             <div class="settings-hint msg-contact-note"></div>
             <div class="auto-reload-actions">
@@ -3066,7 +3066,7 @@ function messengerNewMessage(prefill) {
         <div class="dialog-header"><h3>New message</h3>
             <button class="modal-close" aria-label="Close">&times;</button></div>
         <div class="settings-hint">An LXMF address (32 hex characters), or a name heard on the network.</div>
-        <input class="cache-search-input msg-new-input" type="text" spellcheck="false" autocomplete="off"
+        <input name="msg-new" aria-label="Address or contact" class="cache-search-input msg-new-input" type="text" spellcheck="false" autocomplete="off"
                placeholder="Address or name">
         <div class="msg-new-results"></div>
         </div>`;

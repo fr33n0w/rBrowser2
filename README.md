@@ -19,7 +19,7 @@ A modern, web-based UI for exploring NomadNet nodes and pages over the Reticulum
 
 
 
-> **Beta - v2.0.4b.** rBrowser 2 is published as a beta: everything works, but
+> **Beta - v2.0.5b.** rBrowser 2 is published as a beta: everything works, but
 > some parts of the interface may still have bugs. They are fixed as soon as
 > possible. To hear about updates, switch on *Settings > About > Check for
 > updates at start* (a window tells you when a new version is out, with the
@@ -111,16 +111,31 @@ saves it as a normal identity, the only way back to accounts made with it.
 Your existing `nomadnet_browser_identity` is the default one, unchanged.
 Pages seen while identified are never stored in the page cache.
 
+**Custom address generator.** Settings > Identity > Generate vanity address:
+a new identity whose LXMF address (or, for RRC, identity hash) starts or
+ends with characters you choose (`c0ffee…`, `…c0ffee`). It runs in the background on the computer that runs rBrowser;
+each character more takes 16 times longer (on a PC: 5 in seconds, 6 in
+minutes), so keep it short on a Raspberry Pi. Save it, use it, or export it
+for another app.
+
 **Auto-identify.** Each node remembers the identity you first identified to it
 with. Switched on, rBrowser sends the fingerprint on its own, with that
 identity, when you open one of its pages - once per node per session. If a
 different identity is in use, it asks before switching.
 
-**Internet check.** Settings > System, off by default. Reticulum notices a
-dead line late, so when this is on rBrowser opens a connection to the hosts
-you choose every 15 seconds (nothing is sent) and says when the internet goes
-away and comes back: a line in the terminal, the status bar in red, a
-notification. While it is away, what uses the internet by itself waits
+**Reticulum interfaces.** Always watched, nothing is sent: when an interface
+to the network goes down (a TCP link lost, a phone out of coverage) or comes
+back, a line in the terminal; with none of them up the status bar says
+"Reticulum interface disconnected" in red. An RNode on the air with no
+internet keeps Reticulum connected.
+
+**Internet check.** Settings > System Setup, off by default. When on, rBrowser
+checks every 15 seconds, with a
+time server (NTP, one small UDP packet, the default: `pool.ntp.org`) or a
+connection to hosts you choose (nothing is sent), and says when the internet
+goes away and comes back: a line in the terminal, "No internet connection" in
+red in the status bar, a notification. Test asks each server in the list at
+once, so a dead server is not taken for a dead line. While it is away, what uses the internet by itself waits
 instead of filling the log with errors (update check, RMAP download, Dynamic
 DNS) and goes on when it is back. NomadNet, LXMF and RRC go on as usual: they
 run over Reticulum, which may also have radio links. Off, nothing is contacted.
@@ -136,12 +151,12 @@ you start rBrowser by hand.
 `http://rbrowser.local:5000` without the IP. It is announced with mDNS
 (zeroconf, installed with the requirements) and applies at once. Only when
 rBrowser listens on the network (`0.0.0.0`). Anyone on that network can open
-it: turn on the access password (Settings > System) to keep them out.
+it: turn on the access password (Settings > System Setup) to keep them out.
 
 **Links from anywhere.** `nomadnetwork://`, `rrc://` and `rbrowser://` links
 on web pages (rmap.world's "Open in rBrowser2") and in other programs open in
 rBrowser, which starts if it is not running. On by default for the links no
-other program opens; Settings > System > Links turns them off. A link holds
+other program opens; Settings > System Setup > Links turns them off. A link holds
 NomadNet's own syntax: `<hash>:/page/...` opens the page, `lxmf@<hash>` the
 messenger, `rrc://<hub>/<room>` the chat, `retibbs.bbs@<hash>` the BBS
 client, `lxmf.propagation@<hash>` offers it as your propagation node. Only
@@ -384,7 +399,7 @@ over Reticulum; "Listen for" picks the kinds of BBS: for now
 [RetiBBS](https://github.com/kc1awv/RetiBBS), in the Reticulum manual.
 While on, a BBS icon sits next to the page tabs. (All the apps, LXMF, RRC,
 BBS and RMAP, sit there with icon and name; on a phone only the icon. An app
-switched off in Settings leaves the bar: Settings > System > Apps in the tab bar
+switched off in Settings leaves the bar: Settings > System Setup > Apps in the tab bar
 has the four switches together. A dot before each says its state:
 green connected / listening / list fetched, yellow connecting or fetching, red
 failed, grey nothing open; the tooltip says it in words. × at the end switches
@@ -459,7 +474,11 @@ unban) or the hub's (rooms, join, ping, nick, copy addresses, the colours'
 legend, connect; for server operators stats, K-lines, reload). The head
 shows your identity hash beside your nick. ☺ opens the emoji. Every message
 shows its time and nick (bold), also several in a row from the same person,
-with a bar in the speaker's colour; yellow when it names you. The hub's
+with a bar in the speaker's colour; yellow when it names you. In the rooms
+timestamps can be short (hh:mm) or hidden, apart on a computer and on a phone
+(Settings > RRC Client); the hub tab always shows them in full. In a window
+under 1200 px opening RRC closes the node list (the » button opens it again;
+"Auto-close the NomadNet list on small screens" in the same settings). The hub's
 lines have a bar too (notices, errors, joins and parts in bold, the nick in
 its list colour). In the people list a ▸ marks you.
 `/notice text` sends a notice to this room, `/noticeall text` to every room
@@ -479,7 +498,7 @@ Right-click on a message (long press on a phone): Reply puts `> nick: text` in t
 room, or only the rooms switched on from the AutoReply menu while in them.
 In that menu each reply is a quick on/off; Config opens the settings.
 News in a room you are not looking at: a "N new" line where it starts, a
-dot on the tab, and the sounds (Settings > System > Sounds), also for a hub
+dot on the tab, and the sounds (Settings > System Setup > Sounds), also for a hub
 that connects or drops. The pop-ups each have a switch in Settings > RRC
 chat: names you, messages (who and where only, never the text), hub events
 (connected, dropped, kicked, banned).
@@ -540,7 +559,7 @@ all) or online (Esri tiles, with streets and names); the map
 providers' terms forbid downloading their tiles for offline use. With RMAP
 off, rBrowser makes no request outside Reticulum.
 
-**Access password** (Settings > System, off by default). rBrowser listens on
+**Access password** (Settings > System Setup, off by default). rBrowser listens on
 your network so a phone can use it, which means anyone on that network can
 too. With the password on, every page and call needs it (the session lasts
 30 days in that browser). This computer gets in without asking unless "Ask
@@ -551,7 +570,7 @@ the password off they are refused). Only a salted PBKDF2 hash is kept
 other browser out; 5 wrong passwords lock that address out for 5 minutes.
 Forgot it: stop rBrowser and delete settings/auth.json.
 
-**Remote access** (Settings > System). Switch it on and rBrowser gives you an
+**Remote access** (Settings > System Setup). Switch it on and rBrowser gives you an
 https link that works from anywhere, with no router port to open: a free
 Cloudflare quick tunnel (`cloudflared`, downloaded once into `bin/`, no
 account). The link changes each time the tunnel starts. It needs the access
@@ -579,7 +598,7 @@ and it must be opened by IP address, `localhost`, a `.local` name or a LAN
 name without dots. With the password off, requests from the internet (a port
 opened on the router) are refused.
 
-**Sounds** (Settings > System > Sounds; what sounded while the window was in
+**Sounds** (Settings > System Setup > Sounds; what sounded while the window was in
 the background is listed in one notice when you come back): a short tone, made in the page,
 for a new message in the Messenger, being named in RRC chat, messages in
 your RRC rooms and a BBS server writing while you are elsewhere - each on
@@ -777,7 +796,7 @@ and Copy URL.
 **Light rendering for long pages.** On a computer each character of a page
 is its own cell, which keeps ASCII art on an exact grid - but a list of 2000
 lines (a git index, a directory) is about 90 000 elements and took tens of
-seconds. Past a size (Settings > Pages, 20k characters by default) the page
+seconds. Past a size (Settings > NomadNet Browser, 20k characters by default) the page
 is drawn as plain monospace text, as phones always do: about ten times
 faster, every link and field still works. Can be switched off.
 
@@ -983,12 +1002,13 @@ It also runs well on a remote machine (a Raspberry Pi at home, a server):
 - **URL Navigation**: Address bar with back/forward navigation and manual URL input
 - **Dual View Modes**: Toggle between Rendered Micron content and Raw page view
 - **Link Navigation**: Click on links within Micron content to navigate between pages
-- **Connection Status**: Real-time display of network status and discovered pages / announced nodes
+- **Status Bar**: One line across the window, whatever client is open (top by default, or bottom: Settings > System Setup): connection, then icons for all the announces, NomadNet nodes and, for the clients that are on, LXMF peers, propagation nodes, RRC hubs, BBS servers and RMAP nodes (heard live since start; the tooltip adds what Reticulum remembers), CPU and RAM and a clock at the right end
 - **File Download Support**: Download files hosted on nomadnet nodes
 - **Add To Favorites**: Favorite system with star button synched across the whole UI tabs
 - ℹ **Node Info**: Extended node info for remote node hosting page in the node list
 - **Fingerprint**: Allow to identify with identity and LXMF address to remote host with a button
 - **Identities**: Several identities (one per account), an ephemeral throwaway identity, per-node auto-identify; the identity button in the page bar drops a menu to browse as another one (new ephemeral, copy the hash, settings)
+- **Custom address generator**: Identities whose LXMF address starts with characters you choose (vanity address), searched in the background
 - **Web server settings**: Host and port editable in Settings, with automatic restart
 - **Inline Images**: Renders images embedded in Micron pages, fetched over the node's `/media` handler
 - **Page Partials**: Self-refreshing regions of a page, as served by NomadNet 1.4.x
@@ -1016,6 +1036,7 @@ It also runs well on a remote machine (a Raspberry Pi at home, a server):
 - **Local network name**: `rbrowser.local` via mDNS, optional
 - **System links**: `nomadnetwork://` and `rbrowser://` links open in the rBrowser that is running (Windows, Linux)
 - **Settings in categories**: Search, one Save for all (the dialog stays open; Close, x or Esc close it), unsaved-changes and restart-needed warnings
+- **Restart and Shut down**: Two buttons at the foot of the Settings categories, each asks first (not shown to guests)
 - **Contact colours**: Pick a contact's colour with a preview; click the logo for its info
 - **Recent nodes at start**: Optional, from Reticulum's known announces, marked until they announce again
 - **Screenshot settings**: On/off, quality for desktop and mobile
@@ -1045,6 +1066,7 @@ It also runs well on a remote machine (a Raspberry Pi at home, a server):
 | Windows 10 (Python 3.12) | tested: everyday development machine |
 | Raspberry Pi Zero 2 W, Raspberry Pi OS 13 trixie (Python 3.13, RNS 1.5.7) | tested |
 | Docker on Raspberry Pi Zero 2 W (docker.io 26, compose 2.26) | tested: builds in about 9 minutes, image 271 MB, runs in 512 MB of RAM (uses swap) |
+| Linux Mint 21 (Python 3.12.3) | tested: installed with install.sh |
 | Android, Termux 0.118.0 (Python 3.14) | tested: installed with install.sh |
 | Debian 13, in a venv (install.sh option 1, or a venv of your own) | tested on the Raspberry Pi |
 | Browsers: Chrome desktop, Chrome on Android (phone layout) | tested |
@@ -1084,8 +1106,8 @@ Optional, not in requirements.txt: `pycodec2` or `ffmpeg` on the PATH (to play C
 The installer:
 
 - installs the Python packages of `requirements.txt`. In a venv you have
-  activated, it installs there. On Debian 12+, Ubuntu and Pi OS it asks
-  where: a venv in this folder (`.venv`, then start with
+  activated, it installs there. On Debian 12+, Ubuntu
+  and Pi OS it asks where: a venv in this folder (`.venv`, then start with
   `.venv/bin/python rBrowser.py`) or your user with
   `--break-system-packages`, the way the Reticulum manual does. On Termux it
   takes the prebuilt `python-cryptography`, nothing to compile;
@@ -1170,6 +1192,9 @@ preferences there (your name, your nick and the rest).
    .venv/bin/python rBrowser.py
    ```
 
+   On Termux, `pkg install python-cryptography` first: pip then has
+   nothing to compile.
+
 3. **Start rBrowser:**
    ```bash
    python3 rBrowser.py [--host HOST] [--port PORT] [--log full|status]
@@ -1187,7 +1212,7 @@ preferences there (your name, your nick and the rest).
    - Discovered nodes will appear in the left sidebar
    - Click on any node to browse its content and navigate pages
    - or manually paste address in the bar without waiting for announces
-   - Check bottom-left Status Bar for connection status info
+   - Check the status bar (top of the window, or bottom: Settings > System Setup) for the connection, the announces heard and CPU/RAM
 
 
 ---
@@ -1276,7 +1301,7 @@ Notes:
 - Stop and remove containers with `docker compose down`
 - Your identities, settings and visited pages live in three Docker volumes (`rbrowser-identities`, `rbrowser-settings`, `rbrowser-cache`), so they survive rebuilds and `docker compose down`. Only `docker compose down -v` deletes them.
 - Your own identity file, cache and settings are never copied into the image (see `.dockerignore`).
-- Host and port of a container are set in `docker-compose.yaml`, not in the Settings page, and restarting from the page is disabled: use `docker compose restart`.
+- Host and port of a container are set in `docker-compose.yaml`, not in the Settings page, and Restart / Shut down from the page are disabled: use `docker compose restart` / `docker compose stop`.
 
 At the end, open the rBrowser UI at http://localhost:5000 (or your configured port).
 
@@ -1448,7 +1473,7 @@ you can reach F. in the RMAP RRC HUB.
 it's optimized to avoid problems so they should not occur in normal usage.
 
 **Disconnections from the network:**
-- Check the status bar, bottom left, for the connection state
+- Check the status bar (top of the window by default) for the connection state
 - Check that rBrowser (the Python process) is still running, and the terminal for Reticulum's errors
 
 **Common errors:**

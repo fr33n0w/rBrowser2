@@ -93,8 +93,8 @@ function ensureRmapTab() {
             <div class="rmap-split" id="rmap-split" title="Drag to resize" role="separator" aria-orientation="horizontal"><span></span></div>
             <div class="rmap-lists" id="rmap-lists">
                 <div class="rmap-tools">
-                    <select id="rmap-pick" class="settings-select rmap-pick" title="Which list to show"></select>
-                    <input type="text" id="rmap-filter" class="msg-search" placeholder="Search name, address, host" spellcheck="false" autocomplete="off">
+                    <select aria-label="Which list to show" id="rmap-pick" class="settings-select rmap-pick" title="Which list to show"></select>
+                    <input aria-label="Search name, address, host" type="text" id="rmap-filter" class="msg-search" placeholder="Search name, address, host" spellcheck="false" autocomplete="off">
                     <span class="rmap-note">From rmap.world: hops are counted from rmap, not from here.</span>
                 </div>
                 <div class="rmap-cols" id="rmap-cols"></div>
@@ -702,7 +702,7 @@ function rmapConfigDialog(n, group) {
             ${row('Address', `<code>${escapeHtml(n.hash)}</code>`)}
         </div>
         ${config ? `<div class="settings-hint">${rnode ? 'Fill in your port and power, then' : ''} paste it into the Reticulum config (interfaces section), then restart Reticulum.</div>
-            <textarea class="settings-input settings-textarea rmap-cfg-text" spellcheck="false" rows="${config.split('\n').length + 1}">${escapeHtml(config)}</textarea>`
+            <textarea name="rmap-config" aria-label="Interface config" class="settings-input settings-textarea rmap-cfg-text" spellcheck="false" rows="${config.split('\n').length + 1}">${escapeHtml(config)}</textarea>`
                  : `<div class="settings-hint">${why}</div>`}
         <div class="auto-reload-actions">
             <button class="btn-cancel" data-a="addr">Copy address</button>

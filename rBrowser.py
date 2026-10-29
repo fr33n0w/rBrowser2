@@ -39,17 +39,20 @@ if "--open" in sys.argv[1:]:
 
 from flask import Flask
 
-from rbrowser import (console_log, favorites, hidden_nodes, identities, links, mdns, messenger, nomadnet,
-                      pagecache, propagation, remote, retibbs, rmap, routes, rrc, server_settings, visits,
-                      web_browser)
+from rbrowser import (console_log, favorites, hidden_nodes, identities, links, mdns, messenger, netwatch,
+                      nomadnet, pagecache, propagation, remote, retibbs, rmap, rnswatch, routes, rrc,
+                      server_settings, visits, web_browser)
 from rbrowser.server_settings import ServerSettings, wait_for_previous_instance
 from rbrowser.routes import register_routes
 from rbrowser.web_browser import NomadNetWebBrowser
 
 # The terminal log setting (full / status only) applies to everything the
 # rbrowser package prints. This file's own startup lines are always shown.
-console_log.install(favorites, hidden_nodes, identities, links, mdns, messenger, nomadnet, pagecache,
-                    propagation, remote, retibbs, rmap, routes, rrc, server_settings, visits, web_browser)
+console_log.install(favorites, hidden_nodes, identities, links, mdns, messenger, netwatch, nomadnet,
+                    pagecache, propagation, remote, retibbs, rmap, rnswatch, routes, rrc, server_settings,
+                    visits, web_browser)
+# This file's own lines: always shown, with the time like the others.
+print = console_log.console.say
 
 
 # Ensure UTF-8 output for Windows console.
@@ -226,7 +229,8 @@ def main() -> int:
         # Where links clicked in other programs find this rBrowser.
         from rbrowser.links import record_running
         record_running(args.host, args.port)
-        print("=========== Press Ctrl+C to stop and exit ============\n")
+        print("🛑 Press Ctrl+C to stop and exit")
+        print()
 
         if browser.init_reticulum():
             browser.start_monitoring()

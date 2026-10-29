@@ -133,6 +133,9 @@ class RetiBBS:
         self.settings: Dict[str, Any] = json.loads(json.dumps(self.DEFAULTS))
         self._load()
         self.heard: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        # Heard live since rBrowser started (not the prefill from Reticulum's
+        # memory, not an answer to a path request): the status bar's number.
+        self.live: set = set()
         self.sessions: Dict[str, Session] = {}
         self._registered = False
         self.revision = 0
@@ -242,6 +245,8 @@ class RetiBBS:
                           app_data: Optional[bytes], *args: Any, **kwargs: Any) -> None:
         if announced_identity is None or not self.listening():
             return
+        if not kwargs.get("is_path_response"):
+            self.live.add(destination_hash.hex())
         self._heard(destination_hash.hex(), server_name(app_data), time.time())
 
     def prefill(self) -> None:

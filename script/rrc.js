@@ -125,10 +125,10 @@ function ensureRrcTab() {
                 <button class="msg-close" onclick="closeRrc()" title="Close RRC" aria-label="Close">&times;</button>
             </div>
             <div class="bbs-connect">
-                <input type="text" id="rrc-address" class="msg-search" placeholder="Hub address (32 hex)" spellcheck="false" autocomplete="off">
+                <input aria-label="Hub address" type="text" id="rrc-address" class="msg-search" placeholder="Hub address (32 hex)" spellcheck="false" autocomplete="off">
                 <button class="msg-bar-btn primary" id="rrc-address-go">Connect</button>
             </div>
-            <input type="text" id="rrc-filter" class="msg-search bbs-filter" placeholder="Search hubs" spellcheck="false" autocomplete="off">
+            <input aria-label="Search hubs" type="text" id="rrc-filter" class="msg-search bbs-filter" placeholder="Search hubs" spellcheck="false" autocomplete="off">
             <div class="bbs-servers" id="rrc-hubs"><div class="msg-search-none">Listening for hubs…</div></div>
         </div>
         <div class="bbs-main rrc-main">
@@ -147,7 +147,7 @@ function ensureRrcTab() {
                 <div class="rrc-emojis" id="rrc-emojis" hidden></div>
                 <span class="rrc-prompt" id="rrc-prompt"></span>
                 <button class="rrc-emoji-btn rrc-cmds-btn" id="rrc-cmds-btn" title="Commands (or type /)" aria-label="Commands">/</button>
-                <textarea id="rrc-input" class="bbs-input rrc-input-area" rows="1" spellcheck="false" autocomplete="off"
+                <textarea aria-label="Message" id="rrc-input" class="bbs-input rrc-input-area" rows="1" spellcheck="false" autocomplete="off"
                        placeholder="Message - Shift+Enter new line, /help for the commands, Tab completes a nick, ↑↓ earlier lines"></textarea>
                 <button class="rrc-emoji-btn" id="rrc-emoji-btn" title="Emoji" aria-label="Emoji">☺</button>
                 <button class="msg-send" id="rrc-send" title="Send (Enter)" aria-label="Send"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 8l11-5.5L9.5 14 7.5 9z" fill="currentColor"/></svg></button>
@@ -155,6 +155,14 @@ function ensureRrcTab() {
         </div>`;
     document.getElementById('tab-content-wrapper').appendChild(view);
     bindRrcView(view);
+    // A narrow chat column (a small window, the browser's tools open): the
+    // head's buttons as icons, as on a phone.
+    const main = view.querySelector('.rrc-main');
+    new ResizeObserver(() => {
+        const w = main.clientWidth;
+        if (w) main.classList.toggle('rrc-tight', w < 540);
+    }).observe(main);
+    watchRrcNodeList();
     applySidebarState(document.body.classList.contains('sidebar-collapsed'));
     applyClientList('rrc');
 }
@@ -513,6 +521,42 @@ document.addEventListener('keydown', e => {
     if (input && !input.closest('[hidden]')) input.focus();
 });
 
+// Settings > RRC Client > Auto-close the NomadNet list: in a window under
+// 1200 px (a phone has a layout of its own) opening RRC, or the window
+// getting that narrow while RRC is open, closes the node list once; the
+// button opens it again. Closed this way, it is back when you leave RRC.
+const RRC_NODES_AUTOCLOSE_WIDTH = 1200;
+
+function rrcSmallScreen() {
+    return window.innerWidth < RRC_NODES_AUTOCLOSE_WIDTH && !window.matchMedia('(max-width: 767px)').matches;
+}
+
+function rrcAutoCloseNodes() {
+    if (!Rrc.open || APP_WINDOW || rrcSetting('autoclose_nodes', true) === false || !rrcSmallScreen()) return;
+    if (document.body.classList.contains('sidebar-collapsed')) return;
+    applySidebarState(true);
+    Rrc.closedNodes = true;
+}
+
+function watchRrcNodeList() {
+    let wasSmall = rrcSmallScreen();
+    window.addEventListener('resize', () => {
+        const small = rrcSmallScreen();
+        if (small && !wasSmall) rrcAutoCloseNodes();
+        wasSmall = small;
+    });
+    new MutationObserver(() => {
+        if (!Rrc.closedNodes) return;
+        const collapsed = document.body.classList.contains('sidebar-collapsed');
+        // Opened again by hand: yours from now on.
+        if (!collapsed) Rrc.closedNodes = false;
+        else if (!document.body.classList.contains('rrc-open')) {
+            Rrc.closedNodes = false;
+            applySidebarState(false);
+        }
+    }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+}
+
 function openRrc() {
     if (!rrcEnabled()) {
         showNotification('The RRC client is off: Settings > RRC Client', 'info', 5000);
@@ -535,6 +579,7 @@ function openRrc() {
     // Nothing on screen yet (a page reload): the first connected hub's tab
     // opens by itself, as soon as there is one (see pollRrc).
     Rrc.autoPick = !Rrc.active;
+    rrcAutoCloseNodes();
     pollRrc();
     // News waiting (the badge on the RRC tab): each click takes you to the
     // next window that has some, mentions first.
@@ -561,9 +606,20 @@ function closeRrc() {
     if (typeof activeTabId !== 'undefined' && activeTabId) switchToTab(activeTabId);
 }
 
+// Settings > RRC Client: the times in the room windows (the hub tab keeps
+// them in full). Classes on #rrc-screens, style.css does the rest.
+function rrcApplyTimes() {
+    const box = document.getElementById('rrc-screens');
+    if (!box) return;
+    box.classList.toggle('rrc-ts-off-desktop', rrcSetting('room_ts_desktop', true) === false);
+    box.classList.toggle('rrc-ts-off-mobile', rrcSetting('room_ts_mobile', true) === false);
+    box.classList.toggle('rrc-ts-short', rrcSetting('room_ts_short', false) === true);
+}
+
 function applyRrcVisibility() {
     const on = rrcEnabled();
     if (on) ensureRrcTab();
+    rrcApplyTimes();
     const tab = document.getElementById('rrc-tab');
     if (tab) tab.hidden = !on;
     layoutAppTabs();
@@ -720,7 +776,7 @@ function rrcCounts(line, me) {
     return !!line.src && line.src !== me && ['msg', 'action', 'notice'].includes(line.kind);
 }
 
-// News while you look elsewhere: the sound always (Settings > System >
+// News while you look elsewhere: the sound always (Settings > System Setup >
 // Sounds decides if it plays), the popup as the RRC settings say.
 function rrcAlert(address, line, me) {
     if (typeof appWindowElsewhere === 'function' && appWindowElsewhere('rrc')) return;   // its window tells
@@ -806,7 +862,7 @@ function rrcPane(address, room) {
     let pane = Rrc.panes[key];
     if (!pane) {
         const el = document.createElement('div');
-        el.className = 'rrc-screen';
+        el.className = room ? 'rrc-screen rrc-room-screen' : 'rrc-screen';
         el.hidden = !(Rrc.active && rrcKey(Rrc.active.hub, Rrc.active.room) === key);
         el.setAttribute('role', 'log');
         document.getElementById('rrc-screens').appendChild(el);
@@ -936,7 +992,7 @@ function rrcLineEl(line, pane, me) {
 // (Settings > RRC Client > Compact joins and parts). Anything else said, a
 // "new" line, or ten minutes, starts a new one.
 function rrcStartFold(pane, line, el) {
-    const on = rrcSetting('compact_joins', true) !== false;
+    const on = rrcSetting('compact_joins', false) === true;
     pane.fold = on && (line.kind === 'join' || line.kind === 'part')
         ? { el, ts: line.ts, joined: [], left: [], colors: {}, room: line.room } : null;
     if (pane.fold) {
@@ -963,7 +1019,7 @@ function rrcFoldNick(name, colors) {
 function rrcFoldJoin(pane, line) {
     const g = pane.fold;
     if (!g || (line.kind !== 'join' && line.kind !== 'part') || pane.el.lastElementChild !== g.el
-        || line.ts - g.ts > 600 || rrcSetting('compact_joins', true) === false
+        || line.ts - g.ts > 600 || rrcSetting('compact_joins', false) !== true
         || (line.room || '') !== (g.room || '')) return false;    // another room's: its own line
     const list = line.kind === 'join' ? g.joined : g.left;
     const name = rrcFoldName(line);
@@ -1482,7 +1538,7 @@ function rrcModal(id, title, body, onClose) {
 function rrcShowRooms(hub) {
     const h = rrcHub(hub);
     const overlay = rrcModal('rrc-rooms-modal', `<span class="rrc-title-name" title="Rooms on ${rrcEsc((h && h.name) || 'this hub')}">${rrcEsc((h && h.name) || 'This hub')}</span> <span class="rrc-who-count"></span>`, `
-        <input type="text" class="rrc-who-search" placeholder="Search, or a room name + Enter to join" spellcheck="false" autocomplete="off">
+        <input name="rrc-rooms-search" aria-label="Search rooms" type="text" class="rrc-who-search" placeholder="Search, or a room name + Enter to join" spellcheck="false" autocomplete="off">
         <div class="dialog-scroll rrc-who-list"></div>
         <div class="rrc-who-foot rrc-rooms-foot"><button class="msg-bar-btn" data-close>Close</button>
             <button class="msg-bar-btn" data-rrc-refresh>Ask again</button>
@@ -1559,7 +1615,7 @@ function renderRrcRoomsModal() {
 // list is the room's people as the client has them. Click: names them.
 function rrcShowWho(hub, room) {
     const overlay = rrcModal('rrc-who', `#${rrcEsc(room)} <span class="rrc-who-count"></span>`, `
-        <input type="text" class="rrc-who-search" placeholder="Search nick or hash" spellcheck="false" autocomplete="off">
+        <input name="rrc-users-search" aria-label="Search users" type="text" class="rrc-who-search" placeholder="Search nick or hash" spellcheck="false" autocomplete="off">
         <div class="dialog-scroll rrc-who-list"></div>
         <div class="rrc-who-foot">Click: name them in the command line - right-click: their menu</div>`);
     overlay.dataset.hub = hub;
@@ -1793,7 +1849,7 @@ function rrcNickDialog(hub) {
     const h = rrcHub(hub);
     const fallback = h && h.nick_source === 'default' ? `the Default nick` : 'hash only (Default nick off)';
     const overlay = rrcModal('rrc-nick', `Nick on ${rrcEsc((h && h.name) || 'this hub')}`, `
-        <input type="text" class="rrc-who-search" maxlength="64" placeholder="Empty: ${rrcEsc(fallback)}" spellcheck="false" autocomplete="off">
+        <input name="rrc-hub-nick" aria-label="Nick on this hub" type="text" class="rrc-who-search" maxlength="64" placeholder="Empty: ${rrcEsc(fallback)}" spellcheck="false" autocomplete="off">
         <div class="rrc-who-foot">Only on this hub, saved in Settings > RRC Client > Saved hubs. A label: hubs know you by your identity, and show the new nick from your next message.
             <button class="msg-bar-btn primary" data-ok>Set</button></div>`);
     const field = overlay.querySelector('input');
@@ -1882,7 +1938,7 @@ function rrcAsk(title, hint, placeholder) {
         let done = false;
         const overlay = rrcModal('rrc-ask', rrcEsc(title), `
             ${hint ? `<div class="settings-hint">${hint}</div>` : ''}
-            <input type="text" class="rrc-who-search" placeholder="${rrcEsc(placeholder || '')}" spellcheck="false" autocomplete="off">
+            <input name="rrc-ask" aria-label="${rrcEsc(title)}" type="text" class="rrc-who-search" placeholder="${rrcEsc(placeholder || '')}" spellcheck="false" autocomplete="off">
             <div class="rrc-who-foot"><button class="msg-bar-btn primary" data-ok>OK</button></div>`,
             () => { if (!done) resolve(null); });
         const field = overlay.querySelector('input');
@@ -2120,7 +2176,11 @@ async function loadRrcSettings() {
     set('setting-rrc-autoconnect', !!st.settings.autoconnect_all);
     set('setting-rrc-autoconnect-sel', st.settings.autoconnect_selected !== false);
     set('setting-rrc-rejoin', st.settings.rejoin_rooms !== false);
-    set('setting-rrc-compact', st.settings.compact_joins !== false);
+    set('setting-rrc-compact', !!st.settings.compact_joins);
+    set('setting-rrc-ts-desktop', st.settings.room_ts_desktop !== false);
+    set('setting-rrc-ts-short', !!st.settings.room_ts_short);
+    set('setting-rrc-ts-mobile', st.settings.room_ts_mobile !== false);
+    set('setting-rrc-autoclose-nodes', st.settings.autoclose_nodes !== false);
     set('setting-rrc-notices-hub', !!st.settings.notices_to_hub);
     set('setting-rrc-show-auto', st.settings.show_auto !== false);
     set('setting-rrc-notify-mentions', st.settings.notify_mentions !== false);
@@ -2147,18 +2207,34 @@ async function loadRrcSettings() {
     if (nick) nick.value = st.settings.nick || '';
     const words = document.getElementById('setting-rrc-highlight');
     if (words) words.value = st.settings.highlight || '';
-    const select = document.getElementById('setting-rrc-identity');
-    if (select) {
-        const keep = select.dataset.picked;     // a choice not saved yet stays
-        select.innerHTML = (st.identities || []).map(i => `<option value="${rrcEsc(i.id)}" title="${rrcEsc(i.hash)}">${rrcEsc(i.name)} (${rrcEsc(i.hash.slice(0, 8))})${i.rrc ? ' - made for RRC' : ' - Messenger, can be written to on LXMF'}</option>`).join('');
-        select.value = keep && (st.identities || []).some(i => i.id === keep) ? keep : st.settings.identity;
-        select.onchange = () => { select.dataset.picked = select.value; };
-    }
+    fillRrcIdentitySelect(st);
     const add = document.getElementById('setting-rrc-id-new');
     if (add) add.onclick = rrcNewIdentity;
     const del = document.getElementById('setting-rrc-id-delete');
     if (del) del.onclick = rrcDeleteIdentity;
     renderRrcHubSettings(st);
+}
+
+function fillRrcIdentitySelect(st) {
+    const select = document.getElementById('setting-rrc-identity');
+    if (!select) return;
+    const keep = select.dataset.picked;     // a choice not saved yet stays
+    select.innerHTML = (st.identities || []).map(i => `<option value="${rrcEsc(i.id)}" title="${rrcEsc(i.hash)}">${rrcEsc(i.name)} (${rrcEsc(i.hash.slice(0, 8))})${i.rrc ? ' - made for RRC' : ' - Messenger, can be written to on LXMF'}</option>`).join('');
+    select.value = keep && (st.identities || []).some(i => i.id === keep) ? keep : st.settings.identity;
+    select.onchange = () => { select.dataset.picked = select.value; };
+}
+
+// An identity imported, made, renamed or deleted in Settings > Identity while
+// the dialog is open: Chat as and the hubs' boxes get the new list, the rest
+// of the RRC settings (maybe edited, not saved) stays as it is.
+async function refreshRrcIdentityChoices() {
+    if (!document.getElementById('setting-rrc-identity')) return;
+    let st;
+    try { st = await fetch('/api/rrc').then(r => r.json()); } catch (e) { return; }
+    if (!st || !st.settings) return;
+    if (Rrc.state) Rrc.state.identities = st.identities;
+    fillRrcIdentitySelect(st);
+    renderRrcHubSettings(Rrc.state || st);
 }
 
 // Settings > RRC Client > Saved hubs: every hub you have been on, who you are there.
@@ -2181,11 +2257,11 @@ async function renderRrcHubSettings(st) {
     box.innerHTML = rows.map(r => `<div class="rrc-hubset-row" data-hub="${rrcEsc(r.address)}">
             <div class="rrc-hubset-name" title="${rrcEsc(r.address)}">${r.connected ? '<span class="bbs-state bbs-state-connected"></span>' : ''}${rrcEsc(r.name || 'Unnamed hub')}
                 <code>${rrcEsc(r.address.slice(0, 12))}…</code></div>
-            <select class="settings-select rrc-hubset-id" title="Identity on this hub: one chosen for it, or the one of Chat as (it follows Chat as when that changes)">
+            <select name="rrc-hub-identity" aria-label="Identity on this hub" class="settings-select rrc-hubset-id" title="Identity on this hub: one chosen for it, or the one of Chat as (it follows Chat as when that changes)">
                 <option value="">${rrcEsc(chatAs())} · from Chat as</option>
                 ${ids.map(i => `<option value="${rrcEsc(i.id)}"${r.identity === i.id ? ' selected' : ''}>${rrcEsc(i.name)} (${rrcEsc(i.hash.slice(0, 8))})</option>`).join('')}
             </select>
-            <input type="text" class="settings-input rrc-hubset-nick" maxlength="64" spellcheck="false" autocomplete="off"
+            <input name="rrc-hub-nick" aria-label="Nick on this hub" type="text" class="settings-input rrc-hubset-nick" maxlength="64" spellcheck="false" autocomplete="off"
                    value="${rrcEsc(r.nick)}" placeholder="${rrcEsc(fallback(r))}" title="Nick on this hub; empty: ${rrcEsc(fallback(r))}">
             <button type="button" class="msg-tab-close rrc-hubset-forget" title="Forget this hub: nick, identity and rooms (a favourite stays)">&times;</button>
         </div>`).join('');
@@ -2215,7 +2291,7 @@ async function renderRrcHubSettings(st) {
 // One more identity for RRC alone; it is picked in Chat as (Save keeps it).
 async function rrcNewIdentity() {
     const overlay = rrcModal('rrc-id-new', 'New RRC identity', `
-        <input type="text" class="rrc-who-search" maxlength="40" placeholder="A name for it, only for you (e.g. Radio club)" spellcheck="false" autocomplete="off">
+        <input name="rrc-hub-name" aria-label="Hub name" type="text" class="rrc-who-search" maxlength="40" placeholder="A name for it, only for you (e.g. Radio club)" spellcheck="false" autocomplete="off">
         <div class="rrc-who-foot">A new key: for the hubs a new person, with no ops or bans.
             <button class="msg-bar-btn primary" data-ok>Create</button></div>`);
     const field = overlay.querySelector('input');
@@ -2275,6 +2351,10 @@ function saveRrcSettings() {
         autoconnect_selected: on('setting-rrc-autoconnect-sel'),
         rejoin_rooms: on('setting-rrc-rejoin'),
         compact_joins: on('setting-rrc-compact'),
+        room_ts_desktop: on('setting-rrc-ts-desktop'),
+        room_ts_short: on('setting-rrc-ts-short'),
+        room_ts_mobile: on('setting-rrc-ts-mobile'),
+        autoclose_nodes: on('setting-rrc-autoclose-nodes'),
         notices_to_hub: on('setting-rrc-notices-hub'),
         show_auto: on('setting-rrc-show-auto'),
         notify_mentions: on('setting-rrc-notify-mentions'),

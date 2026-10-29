@@ -43,7 +43,7 @@ SCHEMES = ("nomadnetwork", "rbrowser", "rrc")
 DESKTOP_FILE = "rbrowser-links.desktop"
 _HASH_RE = re.compile(r"[a-fA-F0-9]{32}")
 _PATH_RE = re.compile(r":?/(?:page|file)/[A-Za-z0-9_\-./~]*(?:`[A-Za-z0-9_\-.=|:]*)?")
-# The user's choice in Settings > System > Links; no file = never chosen = on.
+# The user's choice in Settings > System Setup > Links; no file = never chosen = on.
 CHOICE_FILE = os.path.join("settings", "links.json")
 # What another rBrowser folder registers (handler_command): rBrowser.py --open.
 _OTHER_COPY_RE = re.compile(r'rBrowser\.(?:py|exe)"?\s+"?--open', re.I)
@@ -277,7 +277,7 @@ def auto_register() -> None:
         return
     if new:
         try:
-            print(f"🔗 Links registered: {', '.join(s + '://' for s in new)} open in rBrowser (Settings > System > Links)")
+            print(f"🔗 Links registered: {', '.join(s + '://' for s in new)} open in rBrowser (Settings > System Setup > Links)")
         except (UnicodeEncodeError, AttributeError, OSError):
             pass
 

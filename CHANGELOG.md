@@ -3,6 +3,23 @@
 What changes in each version. rBrowser reads this file from GitHub when an
 update is out, and shows the new entries in Settings > About.
 
+## 2.0.5b - 2026-10-29
+
+- Added Custom address generator.
+- Added Restart and Shut down buttons.
+- Added universal status bar.
+- Added RRC timestamp options.
+- Added Reticulum interface watch.
+- Added time server internet check.
+- Added installer venv option.
+- Added Settings tab on phones.
+- Improved terminal log layout.
+- Fixed Termux cryptography install.
+- Fixed RRC header on small windows.
+- Fixed identity lists not refreshing.
+- Fixed browser console warnings.
+- Fixed hidden input bar on Kiwi.
+
 ## 2.0.4b - 2026-10-27
 
 - Added Auto-check updates every N hours.

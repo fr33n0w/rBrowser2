@@ -8,7 +8,7 @@
  * or async, so execution order is unchanged.
  */
 
-// Access password (Settings > System): a call answered 401 means the
+// Access password (Settings > System Setup): a call answered 401 means the
 // session is gone (password changed, or switched on from another browser):
 // back to the login page, once.
 (function watchAuth() {
@@ -923,11 +923,11 @@ function showFavoriteDialog(options = {}) {
             <button class="modal-close" title="Close" aria-label="Close">&times;</button>
         </div>
         <label class="settings-label" for="favorite-address">Address</label>
-        <input type="text" id="favorite-address" class="favorite-input favorite-input-mono"
+        <input aria-label="Node address" type="text" id="favorite-address" class="favorite-input favorite-input-mono"
                placeholder="Node hash or hash:/page/index.mu" autocomplete="off" spellcheck="false">
         <div class="favorite-field-note" id="favorite-address-note"></div>
         <label class="settings-label" for="favorite-name">Name</label>
-        <input type="text" id="favorite-name" class="favorite-input"
+        <input aria-label="Favorite name" type="text" id="favorite-name" class="favorite-input"
                placeholder="Empty: taken from the node's announce" autocomplete="off" maxlength="120">
         <div class="favorite-prefer" role="radiogroup" aria-label="Which name to keep">
             <label class="favorite-prefer-option">
@@ -1318,7 +1318,7 @@ function getNotificationPolicy() {
     return 'all';
 }
 
-// ─── Sounds (Settings > System > Sounds) ───
+// ─── Sounds (Settings > System Setup > Sounds) ───
 // Short tones made with WebAudio, no sound files: one per kind of news, each
 // switched on or off, plus a switch for all and a volume. Kept in this
 // browser: sound belongs to the device. A browser plays nothing before the
@@ -1430,13 +1430,23 @@ function playSound(kind, test = false) {
 }
 
 // Phones let a page make sound only after a touch: the first one anywhere
-// unlocks it, so a sound that comes later plays at once.
-['pointerdown', 'keydown', 'touchstart'].forEach(ev => document.addEventListener(ev, function unlockAudio() {
+// unlocks it, so a sound that comes later plays at once. The browser counts
+// a touch when it ends (touchend, click), not at touchstart; before a real
+// gesture nothing is tried, and it keeps listening until the audio runs.
+const AUDIO_UNLOCK_EVENTS = ['pointerdown', 'keydown', 'touchend', 'click'];
+function unlockAudio() {
+    if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return;
+    const done = () => {
+        if (soundContext.state === 'running')
+            AUDIO_UNLOCK_EVENTS.forEach(ev => document.removeEventListener(ev, unlockAudio, true));
+    };
     try {
         soundContext = soundContext || new (window.AudioContext || window.webkitAudioContext)();
-        if (soundContext.state !== 'running') soundContext.resume().catch(() => {});
+        if (soundContext.state === 'running') done();
+        else soundContext.resume().then(done).catch(() => {});
     } catch (e) { /* no audio here */ }
-}, { once: true, capture: true, passive: true }));
+}
+AUDIO_UNLOCK_EVENTS.forEach(ev => document.addEventListener(ev, unlockAudio, { capture: true, passive: true }));
 document.addEventListener('visibilitychange', () => {
     if (!document.hidden && soundContext && soundContext.state !== 'running') soundContext.resume().catch(() => {});
 });
@@ -2993,7 +3003,7 @@ function showChoiceDialog({ title, html = '', buttons, input = null }) {
         dialog.innerHTML = `
             <h3>${title}</h3>
             <div class="choice-body">${html}</div>
-            ${input ? `<input class="choice-input" type="text" maxlength="40"
+            ${input ? `<input name="choice-input" aria-label="${escapeHtml(input.placeholder || 'Text')}" class="choice-input" type="text" maxlength="40"
                               value="${escapeHtml(input.value || '')}"
                               placeholder="${escapeHtml(input.placeholder || '')}">` : ''}
             <div class="auto-reload-actions"></div>`;
@@ -3134,7 +3144,7 @@ function placeAppTab(tab) {
 
 // On the desktop each tab is icon + name, so as wide as its text; on a
 // phone only the icon, 30px (style.css), to leave room for the pages.
-// Settings is hidden on phones (display none: width 0, it takes no room).
+// Settings last, 30px on phones like the "+".
 function layoutAppTabs() {
     const gear = document.getElementById('tab-bar-settings');
     if (gear && !gear.innerHTML && typeof GEAR_ICON !== 'undefined') gear.innerHTML = GEAR_ICON;
@@ -3232,6 +3242,7 @@ async function identityRequest(url, body = {}, isForm = false) {
     const data = await response.json().catch(() => ({ status: 'error', error: `HTTP ${response.status}` }));
     if (data.status !== 'success') throw new Error(data.error || 'Request failed');
     applyIdentityState(data);
+    refreshIdentityPickers(data);
     return data;
 }
 
@@ -4974,7 +4985,6 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
                 .catch(error => {
                     console.warn('Nodes API error:', error);
                 });
-            updateStarButtonState();
         }
         function updateStatus() {
             fetch(statusUrl())
@@ -4984,6 +4994,7 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
                 })
                 .then(data => {
                     document.getElementById('announce-count').textContent = data.total_announces;
+                    renderHeardStats(data.heard);
                     checkFavoritesRevision(data.favorites_revision);
                     openDeliveredLinks(data.open_links);
                 })
@@ -5025,12 +5036,13 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
                 });
         }
 
-        // rbrowser/netwatch.py: the internet went away or came back.
+        // rbrowser/rnswatch.py and netwatch.py: Reticulum's interfaces or the
+        // internet went away or came back; the server's words say which.
         let lastNetStatus = null;
-        function noteInternetChange(status) {
+        function noteInternetChange(status, message) {
             if (status === 'connerror') return;   // rBrowser itself not answering: says nothing about the internet
             if (status === 'offline' && lastNetStatus !== 'offline') {
-                showNotification('Disconnected from the network, waiting for reconnect...', 'warning', 6000);
+                showNotification(String(message || 'Disconnected from the network').replace(/<[^>]*>/g, ''), 'warning', 6000);
             } else if (lastNetStatus === 'offline' && status !== 'offline') {
                 showNotification('Network connected', 'success', 4000);
             }
@@ -5038,7 +5050,7 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
         }
 
         function updateConnectionStatus(status, message, color) {
-            noteInternetChange(status);
+            noteInternetChange(status, message);
             const state = { green: 'connected', yellow: 'connecting', red: 'failed' }[color] || 'closed';
             if (state !== nomadNetState) {
                 nomadNetState = state;
@@ -8792,6 +8804,27 @@ function settingsFieldState(el) {
     return el.value;
 }
 
+// A row's text is the label of its field: the <span> becomes a <label for>,
+// so the browser (and a screen reader) knows which field it names. Rows are
+// also filled in later (identities, hubs), hence the observer. Checkboxes and
+// rows with no field of their own are left as they are.
+function linkRowLabels(root) {
+    const link = () => root.querySelectorAll('.settings-row > span:first-child').forEach(span => {
+        const field = span.parentElement.querySelector('input:not([type="checkbox"]):not([type="radio"]), select, textarea');
+        if (!field || field.labels?.length || field.hasAttribute('aria-label')) return;
+        if (!field.id) field.id = `row-field-${++linkRowLabels.count}`;
+        const label = document.createElement('label');
+        label.className = 'settings-row-label';
+        for (const attr of span.attributes) label.setAttribute(attr.name, attr.value);
+        label.htmlFor = field.id;
+        label.append(...span.childNodes);
+        span.replaceWith(label);
+    });
+    link();
+    new MutationObserver(link).observe(root, { childList: true, subtree: true });
+}
+linkRowLabels.count = 0;
+
 function trackSettingsChanges(dialog) {
     settingsBaseline = new Map();
     const note = target => {
@@ -8896,20 +8929,19 @@ function readTerminalLogChoice(box) {
 // Settings categories: the column on the left of the dialog. Each section of
 // the dialog says which one it belongs to with data-cat.
 const SETTINGS_CATEGORIES = [
+    ['system', 'System Setup', '<rect x="2" y="2.5" width="12" height="4" rx="1"/><rect x="2" y="9.5" width="12" height="4" rx="1"/><path d="M4.5 4.5h.01M4.5 11.5h.01"/>'],
     ['identity', 'Identity', '<circle cx="8" cy="5.5" r="2.8"/><path d="M2.5 14c.6-3 2.8-4.5 5.5-4.5s4.9 1.5 5.5 4.5"/>'],
-    ['pages', 'Pages', '<path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13M6 8h5M6 10.5h5"/>'],
     ['nomadnet', 'NomadNet Browser', '<path d="M5.5 4h8M5.5 8h8M5.5 12h8"/><circle cx="2.5" cy="4" r=".8"/><circle cx="2.5" cy="8" r=".8"/><circle cx="2.5" cy="12" r=".8"/>'],
     ['messenger', 'LXMF Messenger', '<path d="M2 3h12v8H7l-3.5 2.5V11H2z"/>'],
     ['rrc', 'RRC Client', '<path d="M5.5 2.5l-1.5 11M11 2.5l-1.5 11M2.5 6h11M2 10.5h11"/>'],
     ['retibbs', 'BBS Client', '<rect x="2" y="2.5" width="12" height="9" rx="1"/><path d="M5 14h6M4.5 5.5h4M4.5 8h6"/>'],
     ['rmap', 'RMAP', '<path d="M1.5 3.5l4-1.5 5 2 4-1.5v10l-4 1.5-5-2-4 1.5z"/><path d="M5.5 2v10M10.5 4v10"/>'],
-    ['system', 'System', '<rect x="2" y="2.5" width="12" height="4" rx="1"/><rect x="2" y="9.5" width="12" height="4" rx="1"/><path d="M4.5 4.5h.01M4.5 11.5h.01"/>'],
     ['advanced', 'Advanced', '<path d="M3 4h10M3 8h10M3 12h10"/><circle cx="6" cy="4" r="1.4"/><circle cx="10.5" cy="8" r="1.4"/><circle cx="5" cy="12" r="1.4"/>'],
     ['guest', 'Guest mode', '<circle cx="6" cy="5.5" r="2.4"/><path d="M1.5 13.5c.5-2.6 2.3-4 4.5-4s4 1.4 4.5 4"/><path d="M11 3.5h3.5M11 6h3.5M12.5 8.5H14.5"/>'],
     ['about', 'About', '<circle cx="8" cy="8" r="6"/><path d="M8 7.2v4M8 4.8h.01"/>'],
 ];
 
-// Settings > System > Apps in the tab bar: copies of each app's own
+// Settings > System Setup > Apps in the tab bar: copies of each app's own
 // "Enable" switch, all in one place. A click on the copy clicks
 // the original, so loading and Save stay as they were (wireAppBarSwitches).
 const APP_BAR_SWITCHES = [
@@ -8939,9 +8971,9 @@ function settingsIcon(paths) {
 
 function readSettingsCategory() {
     try {
-        const cat = localStorage.getItem('rbrowser_settings_category') || 'identity';
-        return cat === 'saved' || cat === 'nodes' ? 'nomadnet' : cat;   // merged into NomadNet Browser
-    } catch (e) { return 'identity'; }
+        const cat = localStorage.getItem('rbrowser_settings_category') || 'system';
+        return cat === 'saved' || cat === 'nodes' || cat === 'pages' ? 'nomadnet' : cat;   // merged into NomadNet Browser
+    } catch (e) { return 'system'; }
 }
 
 // Shows one category; the search box, while it holds text, shows every
@@ -9003,7 +9035,7 @@ function syncSettingsNav() {
     else filterSettings();
 }
 
-// Settings > System > Access password: its own Apply, at once (not Save):
+// Settings > System Setup > Access password: its own Apply, at once (not Save):
 // a change asks for the current password and must not wait for the dialog.
 async function loadAuthSettings() {
     let st;
@@ -9095,7 +9127,7 @@ function lockSettingsForGuest(dialog) {
     dialog.querySelector('.dialog-footer .btn-save')?.remove();
 }
 
-// Settings > System > Remote access + Dynamic DNS (rbrowser/remote.py):
+// Settings > System Setup > Remote access + Dynamic DNS (rbrowser/remote.py):
 // applied at once, like the password. The state is asked again every few
 // seconds while the dialog is open (the tunnel takes a moment to start).
 async function loadRemoteSettings(first = true) {
@@ -9103,7 +9135,8 @@ async function loadRemoteSettings(first = true) {
     if (!box) return;
     let st;
     try { st = await fetch('/api/remote').then(r => r.json()); } catch (e) { return; }
-    if (st.status !== 'success') return;
+    // Settings closed while it was asked: nothing left to fill in.
+    if (st.status !== 'success' || !box.isConnected) return;
     const s = st.settings, t = st.tunnel, d = st.ddns;
     const tunnel = document.getElementById('setting-remote-tunnel');
     if (tunnel) tunnel.classList.toggle('active', !!s.tunnel_on);
@@ -9191,7 +9224,7 @@ function showSettings(category) {
         </div>
         <div class="settings-body">
         <nav class="settings-nav">
-            <input class="settings-search" type="search" placeholder="Search settings" spellcheck="false"
+            <input class="settings-search" name="settings-search" type="search" placeholder="Search settings" spellcheck="false"
                    oninput="filterSettings()" aria-label="Search settings">
             <div class="settings-nav-list">
             ${SETTINGS_CATEGORIES.map(([key, label, icon]) => `
@@ -9199,24 +9232,34 @@ function showSettings(category) {
                     ${settingsIcon(icon)}<span>${label}</span>
                 </button>`).join('')}
             </div>
+            <div class="settings-power">
+                <button type="button" class="settings-power-btn restart" onclick="confirmRestart()"
+                        title="Restart rBrowser (asks first)">
+                    ${settingsIcon('<path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.75"/><path d="M13 1.8v3h-3"/>')}<span>Restart</span>
+                </button>
+                <button type="button" class="settings-power-btn shutdown" onclick="confirmShutdown()"
+                        title="Stop rBrowser (asks first)">
+                    ${settingsIcon('<path d="M8 1.6v5.6"/><path d="M4.7 3.9a5.2 5.2 0 1 0 6.6 0"/>')}<span>Shut down</span>
+                </button>
+            </div>
         </nav>
         <div class="dialog-scroll settings-pane">
         <div class="settings-pane-title"></div>
 
         <div class="auto-reload-setting" data-cat="identity" id="settings-identity-section">
-            <label class="settings-label">Identity</label>
+            <div class="settings-label">Identity</div>
             <div class="settings-hint">Nodes see your identity only after you identify. Each identity is a
                 separate account. Changes here apply immediately.</div>
             <div id="identity-body" class="settings-identity">Loading...</div>
         </div>
 
         <div class="auto-reload-setting" data-cat="identity">
-            <label class="settings-label">Auto-identify</label>
+            <div class="settings-label">Auto-identify</div>
             <div id="autoid-body" class="settings-identity">Loading...</div>
         </div>
 
         <div class="auto-reload-setting" data-cat="system">
-            <label class="settings-label">Apps in the tab bar</label>
+            <div class="settings-label">Apps in the tab bar</div>
             <div class="settings-hint">Each app has its icon next to the page tabs while it is on. The same
                 switches as "Enable" at the top of each app's own settings. Saved with Save.</div>
             ${APP_BAR_SWITCHES.map(([key, label, cat, original]) => `
@@ -9227,13 +9270,20 @@ function showSettings(category) {
         </div>
 
         <div class="auto-reload-setting" data-cat="system">
-            <label class="settings-label">Notifications and log</label>
+            <div class="settings-label">Notifications and log</div>
             <div class="settings-row">
                 <span>Notifications</span>
                 <select id="setting-notifications" class="settings-select">
                     <option value="all">All</option>
                     <option value="errors">Errors and warnings only</option>
                     <option value="none">None</option>
+                </select>
+            </div>
+            <div class="settings-row">
+                <span title="The line with the connection status, the announces and what the clients heard, CPU and RAM: at the top or at the bottom of the window">Status bar</span>
+                <select id="setting-statusbar" class="settings-select">
+                    <option value="top">Top</option>
+                    <option value="bottom">Bottom</option>
                 </select>
             </div>
             <div class="settings-row settings-subhead"><span>Sounds</span></div>
@@ -9259,30 +9309,52 @@ function showSettings(category) {
             <div id="setting-terminal-log" class="terminal-log-options">
                 ${TERMINAL_LOG_CATEGORIES.map(([key, label, tip]) => `
                 <label class="terminal-log-option" title="${escapeHtml(tip)}">
-                    <input type="checkbox" data-cat="${key}"> ${escapeHtml(label)}
+                    <input type="checkbox" name="log-${key}" data-cat="${key}"> ${escapeHtml(label)}
                 </label>`).join('')}
             </div>
         </div>
 
         <div class="auto-reload-setting" data-cat="system">
-            <label class="settings-label">Internet check</label>
-            <div class="settings-hint">Reticulum notices a dead line late. When on, rBrowser opens a connection
-                to these hosts every 15 seconds (nothing is sent) and says in the terminal, in the status bar and
-                in a notification when the internet goes away and comes back. Off: nothing is contacted.
-                Applies on Save.</div>
+            <div class="settings-label">Internet check</div>
+            <div class="settings-hint">When on, every 15 seconds rBrowser asks
+                a time server the time (one small UDP packet) or opens a connection to hosts you choose
+                (nothing is sent), and says in the terminal, in the status bar and in a notification when the
+                internet goes away and comes back. Reticulum's own interfaces are watched anyway, always.
+                Off: nothing is contacted. Applies on Save.</div>
             <div class="settings-row">
                 <span title="Off by default">Check the internet connection</span>
                 <div class="toggle-switch" id="setting-netwatch-on"><div class="toggle-slider"></div></div>
             </div>
             <div class="settings-row">
-                <span title="host:port, separated by commas; one answering is enough. Any host you trust: your own server, a DNS resolver...">Hosts</span>
-                <input type="text" id="setting-netwatch-hosts" class="settings-input" spellcheck="false"
-                       aria-label="Hosts for the internet check" placeholder="1.1.1.1:443, 9.9.9.9:443">
+                <span title="A time server keeps no profile of who asks the time; a host is any server you trust">Check with</span>
+                <select id="setting-netwatch-method" class="settings-select" onchange="showNetwatchMethod()">
+                    <option value="ntp">Time server (NTP)</option>
+                    <option value="tcp">Connection to hosts (TCP)</option>
+                </select>
             </div>
+            <div class="settings-row" id="setting-netwatch-time-row">
+                <span title="Names or addresses, separated by commas (port 123 when left out); one answering is enough">Time servers</span>
+                <div class="settings-inline">
+                    <input type="text" id="setting-netwatch-time" class="settings-input" spellcheck="false"
+                           placeholder="pool.ntp.org">
+                    <button type="button" class="msg-bar-btn" onclick="testNetwatchServers()"
+                            title="Ask each time server now, saved or not">Test</button>
+                </div>
+            </div>
+            <div class="settings-row" id="setting-netwatch-hosts-row">
+                <span title="host:port, separated by commas; one answering is enough. Any host you trust: your own server, a DNS resolver...">Hosts</span>
+                <div class="settings-inline">
+                <input type="text" id="setting-netwatch-hosts" class="settings-input" spellcheck="false"
+                       placeholder="1.1.1.1:443, 9.9.9.9:443">
+                <button type="button" class="msg-bar-btn" onclick="testNetwatchServers()"
+                        title="Try each host now, saved or not">Test</button>
+                </div>
+            </div>
+            <div class="settings-hint" id="setting-netwatch-result" hidden></div>
         </div>
 
         <div class="auto-reload-setting" data-cat="system">
-            <label class="settings-label">Access password</label>
+            <div class="settings-label">Access password</div>
             <div class="settings-hint">rBrowser listens on your network, so a phone can use it: anyone on the same
                 network can open it too, read your messages and use your identities. On a network that is not
                 yours, switch this on. Only a hash of the password is kept. Applied with its own button, at once.</div>
@@ -9312,7 +9384,7 @@ function showSettings(category) {
         </div>
 
         <div class="auto-reload-setting" data-cat="system">
-            <label class="settings-label">Remote access</label>
+            <div class="settings-label">Remote access</div>
             <div class="settings-hint">Use rBrowser from outside your network with a link, no router port to open:
                 a free Cloudflare tunnel (cloudflared, downloaded once, no account). The link is https and changes
                 each time the tunnel starts. Cloudflare carries the traffic: the access password above must be on.
@@ -9331,7 +9403,7 @@ function showSettings(category) {
         </div>
 
         <div class="auto-reload-setting" data-cat="system">
-            <label class="settings-label">Dynamic DNS</label>
+            <div class="settings-label">Dynamic DNS</div>
             <div class="settings-hint">Only if you opened a port on your router by hand: a free name kept pointed
                 at your public IP (checked every 5 minutes). Not needed for the tunnel. Without https on that port
                 the password travels in clear: prefer the tunnel.</div>
@@ -9367,7 +9439,7 @@ function showSettings(category) {
         </div>
 
         <div class="auto-reload-setting" data-cat="system">
-            <label class="settings-label">Web server</label>
+            <div class="settings-label">Web server</div>
             <div class="settings-hint">Same as the <code>--host</code> and <code>--port</code> options.
                 Changes require a restart, offered when you save.</div>
             <div class="settings-row">
@@ -9399,7 +9471,7 @@ function showSettings(category) {
         </div>
 
         <div class="auto-reload-setting" data-cat="system" id="settings-links-section">
-            <label class="settings-label">Links</label>
+            <div class="settings-label">Links</div>
             <div class="settings-hint"><code>nomadnetwork://</code>, <code>rrc://</code> and <code>rbrowser://</code>
                 links in web pages (rmap.world's "Open in rBrowser2") and other programs open in rBrowser, which
                 starts if it is not running. On by default, for the links no other program opens. Set on the
@@ -9411,85 +9483,8 @@ function showSettings(category) {
             <div id="links-note" class="settings-hint"></div>
         </div>
 
-        <div class="auto-reload-setting" data-cat="pages">
-            <label class="settings-label">Page rendering</label>
-            <div class="settings-hint">Zoom applied when a page opens. Desktop applies to windows 768px and
-                wider. The - and + buttons affect the current page only. Fit scales
-                the page to the window width.</div>
-            <div class="settings-row">
-                <span>Desktop zoom</span>
-                <select id="setting-zoom-desktop" class="settings-select">
-                    <option value="fit">Fit to window</option>
-                    ${zoomOptions}
-                </select>
-            </div>
-            <div class="settings-row">
-                <span>Mobile zoom</span>
-                <select id="setting-zoom-mobile" class="settings-select">
-                    <option value="fit">Fit to window</option>
-                    ${zoomOptions}
-                </select>
-            </div>
-            <div class="settings-row">
-                <span>Center narrow pages</span>
-                <div class="toggle-switch ${centered ? 'active' : ''}" id="setting-center">
-                    <div class="toggle-slider"></div>
-                </div>
-            </div>
-            <div class="settings-row">
-                <span title="Long pages (big lists, git indexes) are drawn as plain monospace text instead of one cell per character: many times faster, links all work. Phones always draw this way">Light rendering for long pages</span>
-                <div class="settings-inline">
-                    <div class="toggle-switch ${lightRenderingOn() ? 'active' : ''}" id="setting-light-render"><div class="toggle-slider"></div></div>
-                    <select id="setting-light-chars" class="settings-select" title="From this size on">
-                        ${LIGHT_RENDER_CHOICES.map(n => `<option value="${n}"${n === lightRenderingChars() ? ' selected' : ''}>over ${n / 1000}k characters</option>`).join('')}
-                    </select>
-                </div>
-            </div>
-        </div>
-
-        <div class="auto-reload-setting" data-cat="pages">
-            <label class="settings-label">Images in pages</label>
-            <div class="settings-hint">Each image is a separate transfer. On slow links it uses shared airtime.</div>
-            <div class="settings-row">
-                <select id="setting-images" class="settings-select settings-select-wide">
-                    <option value="auto">Fast link only</option>
-                    <option value="always">Always load</option>
-                    <option value="never">Never load</option>
-                </select>
-            </div>
-        </div>
-
-        <div class="auto-reload-setting" data-cat="pages">
-            <label class="settings-label">Screenshots</label>
-            <div class="settings-hint">The camera button saves the whole page as a PNG. Quality is how
-                sharp it is drawn; this browser uses the Desktop or Mobile one by its device.
-                On phones, Medium and High can be slow.</div>
-            <div class="settings-row">
-                <span>Enable screenshots</span>
-                <div class="toggle-switch ${screenshotsEnabled() ? 'active' : ''}" id="setting-screenshots">
-                    <div class="toggle-slider"></div>
-                </div>
-            </div>
-            <div class="settings-row">
-                <span>Desktop quality</span>
-                <select id="setting-shot-desktop" class="settings-select">
-                    <option value="low">Low</option>
-                    <option value="medium">Medium (default)</option>
-                    <option value="high">High</option>
-                </select>
-            </div>
-            <div class="settings-row">
-                <span>Mobile quality</span>
-                <select id="setting-shot-mobile" class="settings-select">
-                    <option value="low">Low (default)</option>
-                    <option value="medium">Medium - may be slow</option>
-                    <option value="high">High - may be slow</option>
-                </select>
-            </div>
-        </div>
-
         <div class="auto-reload-setting" data-cat="nomadnet">
-            <label class="settings-label">Visited pages (Local Search Engine)</label>
+            <div class="settings-label">Visited pages (Local Search Engine)</div>
             <div class="settings-hint">Pages you open are saved locally and can be searched. Nothing is
                 downloaded in the background.</div>
             <div class="settings-row">
@@ -9542,7 +9537,7 @@ function showSettings(category) {
         </div>
 
         <div class="auto-reload-setting" data-cat="nomadnet">
-            <label class="settings-label">Node list</label>
+            <div class="settings-label">Node list</div>
             <div class="settings-hint">A button over the list counts the nodes that came in; click it to
                 go to them, or close it with its x.</div>
             <div class="settings-row">
@@ -9571,7 +9566,7 @@ function showSettings(category) {
         </div>
 
         <div class="auto-reload-setting" data-cat="nomadnet">
-            <label class="settings-label">Favorites</label>
+            <div class="settings-label">Favorites</div>
             <div class="settings-hint">The Favorites menu over the node list and the stars to add to it.
                 Turned off, your favorites are kept and come back when it is on again.</div>
             <div class="settings-row">
@@ -9589,7 +9584,7 @@ function showSettings(category) {
         </div>
 
         <div class="auto-reload-setting" data-cat="nomadnet">
-            <label class="settings-label">History</label>
+            <div class="settings-label">History</div>
             <div class="settings-hint">The pages you open, in the History menu beside Favorites. Kept on
                 this computer only.</div>
             <div class="settings-row">
@@ -9617,14 +9612,91 @@ function showSettings(category) {
         </div>
 
         <div class="auto-reload-setting" data-cat="nomadnet">
-            <label class="settings-label">Hidden nodes</label>
+            <div class="settings-label">Hidden nodes</div>
             <div class="settings-hint">Left out of the node list. Their pages still open from an address,
                 a link or a favorite. Restore applies immediately.</div>
             <div id="hidden-nodes-body" class="hidden-nodes-list">Loading...</div>
         </div>
 
+        <div class="auto-reload-setting" data-cat="nomadnet">
+            <div class="settings-label">Page rendering</div>
+            <div class="settings-hint">Zoom applied when a page opens. Desktop applies to windows 768px and
+                wider. The - and + buttons affect the current page only. Fit scales
+                the page to the window width.</div>
+            <div class="settings-row">
+                <span>Desktop zoom</span>
+                <select id="setting-zoom-desktop" class="settings-select">
+                    <option value="fit">Fit to window</option>
+                    ${zoomOptions}
+                </select>
+            </div>
+            <div class="settings-row">
+                <span>Mobile zoom</span>
+                <select id="setting-zoom-mobile" class="settings-select">
+                    <option value="fit">Fit to window</option>
+                    ${zoomOptions}
+                </select>
+            </div>
+            <div class="settings-row">
+                <span>Center narrow pages</span>
+                <div class="toggle-switch ${centered ? 'active' : ''}" id="setting-center">
+                    <div class="toggle-slider"></div>
+                </div>
+            </div>
+            <div class="settings-row">
+                <span title="Long pages (big lists, git indexes) are drawn as plain monospace text instead of one cell per character: many times faster, links all work. Phones always draw this way">Light rendering for long pages</span>
+                <div class="settings-inline">
+                    <div class="toggle-switch ${lightRenderingOn() ? 'active' : ''}" id="setting-light-render"><div class="toggle-slider"></div></div>
+                    <select id="setting-light-chars" class="settings-select" title="From this size on">
+                        ${LIGHT_RENDER_CHOICES.map(n => `<option value="${n}"${n === lightRenderingChars() ? ' selected' : ''}>over ${n / 1000}k characters</option>`).join('')}
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <div class="auto-reload-setting" data-cat="nomadnet">
+            <div class="settings-label">Images in pages</div>
+            <div class="settings-hint">Each image is a separate transfer. On slow links it uses shared airtime.</div>
+            <div class="settings-row">
+                <select id="setting-images" aria-label="Images in pages" class="settings-select settings-select-wide">
+                    <option value="auto">Fast link only</option>
+                    <option value="always">Always load</option>
+                    <option value="never">Never load</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="auto-reload-setting" data-cat="nomadnet">
+            <div class="settings-label">Screenshots</div>
+            <div class="settings-hint">The camera button saves the whole page as a PNG. Quality is how
+                sharp it is drawn; this browser uses the Desktop or Mobile one by its device.
+                On phones, Medium and High can be slow.</div>
+            <div class="settings-row">
+                <span>Enable screenshots</span>
+                <div class="toggle-switch ${screenshotsEnabled() ? 'active' : ''}" id="setting-screenshots">
+                    <div class="toggle-slider"></div>
+                </div>
+            </div>
+            <div class="settings-row">
+                <span>Desktop quality</span>
+                <select id="setting-shot-desktop" class="settings-select">
+                    <option value="low">Low</option>
+                    <option value="medium">Medium (default)</option>
+                    <option value="high">High</option>
+                </select>
+            </div>
+            <div class="settings-row">
+                <span>Mobile quality</span>
+                <select id="setting-shot-mobile" class="settings-select">
+                    <option value="low">Low (default)</option>
+                    <option value="medium">Medium - may be slow</option>
+                    <option value="high">High - may be slow</option>
+                </select>
+            </div>
+        </div>
+
         <div class="auto-reload-setting" data-cat="messenger" id="settings-messenger-section">
-            <label class="settings-label">LXMF Messenger</label>
+            <div class="settings-label">LXMF Messenger</div>
             <div class="settings-hint">Send and receive LXMF messages, like NomadNet and Sideband. While on,
                 your messenger identity's LXMF address can be reached. Saved with Save.</div>
             <div class="settings-row">
@@ -9691,7 +9763,7 @@ function showSettings(category) {
                 <span title="One rule per line, word = reply. The first that matches wins; hel* matches what starts with hel, * matches anything (put it last)">Reply to keywords</span>
                 <div class="toggle-switch" id="setting-msg-autoreply"><div class="toggle-slider"></div></div>
             </div>
-            <textarea id="setting-msg-rules" class="settings-input settings-textarea" rows="4" spellcheck="false"
+            <textarea id="setting-msg-rules" aria-label="Keyword rules" class="settings-input settings-textarea" rows="4" spellcheck="false"
                       placeholder="ping = pong"></textarea>
             <div class="settings-row">
                 <span>Away</span>
@@ -9701,17 +9773,17 @@ function showSettings(category) {
                         <option value="on">On</option>
                         <option value="scheduled">Every day, from - to</option>
                     </select>
-                    <input id="setting-msg-away-from" class="settings-input settings-time" type="time">
-                    <input id="setting-msg-away-to" class="settings-input settings-time" type="time">
+                    <input id="setting-msg-away-from" aria-label="Away from" class="settings-input settings-time" type="time">
+                    <input id="setting-msg-away-to" aria-label="Away until" class="settings-input settings-time" type="time">
                 </div>
             </div>
-            <textarea id="setting-msg-away-text" class="settings-input settings-textarea" rows="2" maxlength="1000"
+            <textarea id="setting-msg-away-text" aria-label="Away message" class="settings-input settings-textarea" rows="2" maxlength="1000"
                       placeholder="I'm away right now: I will read your message later."></textarea>
             <div class="settings-row">
                 <span title="When no rule and no away message answered: the message goes back. With a text, that text ({msg} = their message)">Echo bot</span>
                 <div class="toggle-switch" id="setting-msg-echo"><div class="toggle-slider"></div></div>
             </div>
-            <input id="setting-msg-echo-text" class="settings-input" type="text" maxlength="1000" spellcheck="false"
+            <input id="setting-msg-echo-text" aria-label="Echo text" class="settings-input" type="text" maxlength="1000" spellcheck="false"
                    placeholder="Empty: their message back. Example: Echo: {msg}">
             <div class="settings-row settings-subhead"><span>Stamp for incoming messages</span></div>
             <div class="settings-hint">Anti-spam. Senders must compute a stamp before writing to you; the cost
@@ -9736,7 +9808,7 @@ function showSettings(category) {
             <div class="settings-row">
                 <span>Node</span>
                 <select id="setting-msg-pn-node" class="settings-select settings-select-node" onchange="renderPropagationChoice()"></select>
-                <select id="setting-msg-pn-mode" hidden>
+                <select id="setting-msg-pn-mode" aria-label="Propagation mode" hidden>
                     <option value="auto">Automatic</option>
                     <option value="manual">Chosen</option>
                 </select>
@@ -9781,7 +9853,7 @@ function showSettings(category) {
         </div>
 
         <div class="auto-reload-setting" data-cat="rrc">
-            <label class="settings-label">RRC Client (Reticulum Relay Chat)</label>
+            <div class="settings-label">RRC Client (Reticulum Relay Chat)</div>
             <div class="settings-hint">Live chat rooms on RRC hubs, IRC style, like the Channels of NomadNet.
                 While on, a chat icon sits next to the page tabs: hubs are found from their announces,
                 favourites and the ones you visited are kept with their rooms. Nothing said is stored:
@@ -9838,6 +9910,22 @@ function showSettings(category) {
                 <div class="toggle-switch" id="setting-rrc-compact"><div class="toggle-slider"></div></div>
             </div>
             <div class="settings-row">
+                <span title="The time before each line in the room windows, on a computer. The hub tab always shows it in full">Timestamps in rooms (desktop)</span>
+                <div class="toggle-switch" id="setting-rrc-ts-desktop"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row">
+                <span title="On a computer the room windows show only hh:mm, as on a phone; the date and the seconds stay in the tooltip. The hub tab keeps the full time, for drops and modes">Short timestamps in rooms (desktop)</span>
+                <div class="toggle-switch" id="setting-rrc-ts-short"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row">
+                <span title="The time before each line in the room windows, on a phone. The hub tab always shows it">Timestamps in rooms (mobile)</span>
+                <div class="toggle-switch" id="setting-rrc-ts-mobile"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row">
+                <span title="In a window under 1200 px wide, opening RRC closes the node list to make room for the chat; the button opens it again, and leaving RRC brings it back">Auto-close the NomadNet list on small screens</span>
+                <div class="toggle-switch" id="setting-rrc-autoclose-nodes"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row">
                 <span title="Every notice of the hub (people's +o/+v, kicks, answers) goes to the hub tab: the rooms keep only the chat, with their own topic and modes">Send all server notifications to the hub tab</span>
                 <div class="toggle-switch" id="setting-rrc-notices-hub"><div class="toggle-slider"></div></div>
             </div>
@@ -9866,7 +9954,7 @@ function showSettings(category) {
                 <span title="One rule per line, word = reply. The first that matches wins; hel* matches what starts with hel, * matches anything (put it last)">Reply to keywords</span>
                 <div class="toggle-switch" id="setting-rrc-autoreply"><div class="toggle-slider"></div></div>
             </div>
-            <textarea id="setting-rrc-rules" class="settings-input settings-textarea" rows="4" spellcheck="false"
+            <textarea id="setting-rrc-rules" aria-label="Keyword rules" class="settings-input settings-textarea" rows="4" spellcheck="false"
                       placeholder="ping = pong"></textarea>
             <div class="settings-row">
                 <span>Away</span>
@@ -9876,11 +9964,11 @@ function showSettings(category) {
                         <option value="on">On</option>
                         <option value="scheduled">Every day, from - to</option>
                     </select>
-                    <input id="setting-rrc-away-from" class="settings-input settings-time" type="time">
-                    <input id="setting-rrc-away-to" class="settings-input settings-time" type="time">
+                    <input id="setting-rrc-away-from" aria-label="Away from" class="settings-input settings-time" type="time">
+                    <input id="setting-rrc-away-to" aria-label="Away until" class="settings-input settings-time" type="time">
                 </div>
             </div>
-            <textarea id="setting-rrc-away-text" class="settings-input settings-textarea" rows="2" maxlength="1000"
+            <textarea id="setting-rrc-away-text" aria-label="Away message" class="settings-input settings-textarea" rows="2" maxlength="1000"
                       placeholder="I'm away right now: I will read your message later."></textarea>
             <div class="settings-row">
                 <span title="While away you are seen with this nick (from your next message: the away notice below, if on). {nick} = your usual nick. Mentions of the usual nick still count">Away nick</span>
@@ -9920,7 +10008,7 @@ function showSettings(category) {
                 <span title="When no rule and no away message answered: the message goes back. With a text, that text ({msg} = their message)">Echo bot</span>
                 <div class="toggle-switch" id="setting-rrc-echo"><div class="toggle-slider"></div></div>
             </div>
-            <input id="setting-rrc-echo-text" class="settings-input" type="text" maxlength="1000" spellcheck="false"
+            <input id="setting-rrc-echo-text" aria-label="Echo text" class="settings-input" type="text" maxlength="1000" spellcheck="false"
                    placeholder="Empty: their message back. Example: Echo: {msg}">
             <div class="settings-row settings-subhead"><span>Pop-ups</span></div>
             <div class="settings-row">
@@ -9938,7 +10026,7 @@ function showSettings(category) {
             <div class="settings-hint">Each pop-up has its switch; the sounds for them are in System &gt; Sounds.</div>
         </div>
         <div class="auto-reload-setting" data-cat="retibbs">
-            <label class="settings-label">BBS Client</label>
+            <div class="settings-label">BBS Client</div>
             <div class="settings-hint">Bulletin boards over Reticulum. While on, a BBS icon sits next to the
                 page tabs: servers are found from their announces, favourites and the ones you visited are kept,
                 and several can be open at once, as tabs. Saved with Save.</div>
@@ -9967,7 +10055,7 @@ function showSettings(category) {
             </div>
         </div>
         <div class="auto-reload-setting" data-cat="rmap">
-            <label class="settings-label">RMAP</label>
+            <div class="settings-label">RMAP</div>
             <div class="settings-hint">The nodes heard by rmap.world, like a remote listener: on a map and in
                 lists by kind. NomadNet pages open, propagation nodes can be used, RRC hubs open in RRC chat, BBS in the BBS client,
                 backbone and TCP servers can be copied into the Reticulum config. Needs internet; fetched
@@ -10001,7 +10089,7 @@ function showSettings(category) {
                 no request outside Reticulum.</div>
         </div>
         <div class="auto-reload-setting" data-cat="advanced" id="settings-advanced-section" hidden>
-            <label class="settings-label">Advanced</label>
+            <div class="settings-label">Advanced</div>
             <div class="settings-hint">Options for people who know what they do. Unlocked from About;
                 described in the README.</div>
             <div class="settings-row">
@@ -10016,7 +10104,7 @@ function showSettings(category) {
         </div>
 
         <div class="auto-reload-setting" data-cat="guest">
-            <label class="settings-label">Guest mode</label>
+            <div class="settings-label">Guest mode</div>
             <div class="settings-hint">Let other people try this rBrowser, for example through the Remote access
                 link: they log in with a guest password and can browse and open the Settings to read them, but
                 change nothing - the server refuses it, whatever page they use. They use the identity you have
@@ -10049,8 +10137,8 @@ function showSettings(category) {
         </div>
 
         <div class="auto-reload-setting" data-cat="about">
-            <label class="settings-label">About</label>
-            <div class="settings-about" id="settings-version" onclick="aboutVersionTap()">rBrowser v2.0.4b</div>
+            <div class="settings-label">About</div>
+            <div class="settings-about" id="settings-version" onclick="aboutVersionTap()">rBrowser v2.0.5b</div>
             <div class="settings-hint">Beta: some parts of the interface may still have bugs; they are fixed as soon as possible.</div>
             <div class="settings-hint" id="settings-usage" title="rBrowser's Python process; page = this browser tab (Chrome/Edge only)"></div>
             <div class="settings-hint">Standalone Reticulum Browser: NomadNet, LXMF, RRC, BBS &amp; RMAP WebUI Clients</div>
@@ -10104,6 +10192,7 @@ function showSettings(category) {
     overlay.appendChild(dialog);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) requestCloseSettings(); });
     document.body.appendChild(overlay);
+    linkRowLabels(dialog);
     trackSettingsChanges(dialog);
     setupUpdateSettings();
     refreshUsage();
@@ -10128,7 +10217,7 @@ function showSettings(category) {
     dialog.querySelector('#setting-history-max').value = String(historySettings.max_entries);
     dialog.querySelector('#setting-history-age').value = String(historySettings.max_age_days);
 
-    dialog.querySelectorAll('#setting-center, #setting-light-render, #setting-screenshots, #setting-local-name-on, #setting-new-nodes, #setting-clear-search, #setting-prefill, #setting-history-enabled, #setting-cache-enabled, #setting-cache-serve, #setting-msg-enabled, #setting-msg-announce-start, #setting-msg-announce-periodic, #setting-msg-allow-ephemeral, #setting-msg-enforce-stamps, #setting-msg-markdown, #setting-msg-check-contacts, #setting-msg-sideband-look, #setting-msg-autosend, #setting-msg-previews, #setting-msg-autoreply, #setting-msg-echo, #setting-msg-opportunistic, #setting-msg-share-contacts, #setting-bbs-enabled, #setting-bbs-proto-retibbs, #setting-bbs-proto-nomadnet, #setting-bbs-fx, #setting-rmap-enabled, #setting-auth-on, #setting-auth-local, #setting-remote-tunnel, #setting-ddns-on, #setting-rrc-enabled, #setting-rrc-nick-on, #setting-rrc-joins, #setting-rrc-reconnect, #setting-rrc-autoconnect, #setting-rrc-autoconnect-sel, #setting-rrc-rejoin, #setting-rrc-compact, #setting-rrc-notices-hub, #setting-rrc-show-auto, #setting-rrc-notify-mentions, #setting-rrc-notify-messages, #setting-rrc-notify-events, #setting-rrc-autoreply, #setting-rrc-echo, #setting-rrc-away-notice, #setting-rrc-away-nick-on, #setting-rrc-back-notice, #setting-msg-pn-on, #setting-msg-pn-fallback, #setting-msg-pn-failover, #setting-msg-sync-periodic, #setting-favorites-enabled, #setting-favorites-follow, #setting-app-window-lxmf, #setting-app-window-rrc, #setting-app-window-bbs, #setting-app-window-rmap')
+    dialog.querySelectorAll('#setting-center, #setting-light-render, #setting-screenshots, #setting-local-name-on, #setting-new-nodes, #setting-clear-search, #setting-prefill, #setting-history-enabled, #setting-cache-enabled, #setting-cache-serve, #setting-msg-enabled, #setting-msg-announce-start, #setting-msg-announce-periodic, #setting-msg-allow-ephemeral, #setting-msg-enforce-stamps, #setting-msg-markdown, #setting-msg-check-contacts, #setting-msg-sideband-look, #setting-msg-autosend, #setting-msg-previews, #setting-msg-autoreply, #setting-msg-echo, #setting-msg-opportunistic, #setting-msg-share-contacts, #setting-bbs-enabled, #setting-bbs-proto-retibbs, #setting-bbs-proto-nomadnet, #setting-bbs-fx, #setting-rmap-enabled, #setting-auth-on, #setting-auth-local, #setting-remote-tunnel, #setting-ddns-on, #setting-rrc-enabled, #setting-rrc-nick-on, #setting-rrc-joins, #setting-rrc-reconnect, #setting-rrc-autoconnect, #setting-rrc-autoconnect-sel, #setting-rrc-rejoin, #setting-rrc-compact, #setting-rrc-ts-desktop, #setting-rrc-ts-short, #setting-rrc-ts-mobile, #setting-rrc-autoclose-nodes, #setting-rrc-notices-hub, #setting-rrc-show-auto, #setting-rrc-notify-mentions, #setting-rrc-notify-messages, #setting-rrc-notify-events, #setting-rrc-autoreply, #setting-rrc-echo, #setting-rrc-away-notice, #setting-rrc-away-nick-on, #setting-rrc-back-notice, #setting-msg-pn-on, #setting-msg-pn-fallback, #setting-msg-pn-failover, #setting-msg-sync-periodic, #setting-favorites-enabled, #setting-favorites-follow, #setting-app-window-lxmf, #setting-app-window-rrc, #setting-app-window-bbs, #setting-app-window-rmap')
           .forEach(toggle => toggle.addEventListener('click', function () {
               this.classList.toggle('active');
           }));
@@ -10136,6 +10225,7 @@ function showSettings(category) {
     dialog.querySelector('#setting-msg-pn-on').addEventListener('click', renderPropagationChoice);
 
     dialog.querySelector('#setting-notifications').value = getNotificationPolicy();
+    dialog.querySelector('#setting-statusbar').value = getStatusBarPos();
     {
         const sounds = soundSettings();
         dialog.querySelector('#setting-sounds-on').classList.toggle('active', sounds.on);
@@ -10157,6 +10247,9 @@ function showSettings(category) {
         on.classList.toggle('active', !!s.enabled);
         on.onclick = () => on.classList.toggle('active');
         hosts.value = s.hosts || s.default_hosts || '';
+        document.getElementById('setting-netwatch-time').value = s.time_servers || s.default_time_servers || '';
+        document.getElementById('setting-netwatch-method').value = s.method || 'ntp';
+        showNetwatchMethod();
         on.dataset.loaded = JSON.stringify(readNetwatchChoice());
     }).catch(() => {});
     fetch('/api/console-settings').then(r => r.json()).then(s => {
@@ -10220,7 +10313,7 @@ function saveNodeListSettings() {
     }).catch(e => showNotification(`Node list setting not saved: ${escapeHtml(e.message)}`, 'error', 5000));
 }
 
-// ─── Settings > System > Links (rbrowser/links.py) ───
+// ─── Settings > System Setup > Links (rbrowser/links.py) ───
 
 function renderLinkSettings(st) {
     const toggle = document.getElementById('setting-links');
@@ -10279,6 +10372,31 @@ async function toggleLinks(toggle) {
 
 let messengerState = null;
 
+function fillMessengerIdentitySelect(profiles, allowEphemeral, value) {
+    const select = document.getElementById('setting-msg-identity');
+    if (!select) return;
+    const options = (profiles || []).filter(p => p.loadable)
+        .map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`);
+    if (allowEphemeral) options.push('<option value="ephemeral">Ephemeral (replies lost when it changes)</option>');
+    select.innerHTML = options.join('');
+    select.value = value;
+}
+
+// Settings > Identity changed the list (import, new, rename, delete, a vanity
+// one saved) while the dialog is open: the identity boxes of the Messenger,
+// RRC and BBS follow at once, keeping what each one shows.
+function refreshIdentityPickers(state) {
+    const select = document.getElementById('setting-msg-identity');
+    if (select && messengerState) {
+        const s = messengerState.settings || {};
+        const shown = select.value;
+        const known = (state.profiles || []).some(p => p.loadable && p.id === shown) || shown === 'ephemeral';
+        fillMessengerIdentitySelect(state.profiles, s.allow_ephemeral, known ? shown : s.identity);
+    }
+    if (typeof refreshRrcIdentityChoices === 'function') refreshRrcIdentityChoices();
+    if (typeof refreshRetibbsIdentityChoices === 'function') refreshRetibbsIdentityChoices();
+}
+
 async function loadMessengerSettings() {
     let state, ids;
     try {
@@ -10332,13 +10450,7 @@ async function loadMessengerSettings() {
     }
 
     const select = document.getElementById('setting-msg-identity');
-    if (select) {
-        const options = (ids.profiles || []).filter(p => p.loadable)
-            .map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`);
-        if (s.allow_ephemeral) options.push('<option value="ephemeral">Ephemeral (replies lost when it changes)</option>');
-        select.innerHTML = options.join('');
-        select.value = s.identity;
-    }
+    fillMessengerIdentitySelect(ids.profiles, s.allow_ephemeral, s.identity);
     // Each identity has its own name: the field follows the one chosen.
     const name = document.getElementById('setting-msg-name');
     if (name) name.value = s.display_name || '';
@@ -10790,11 +10902,47 @@ window.addEventListener('load', () => {
 });
 
 // Settings > About > "Tell me in a window": on unless switched off.
-// Settings > System > Internet check, as the dialog has it now.
+// Settings > System Setup > Internet check, as the dialog has it now.
 function readNetwatchChoice() {
     const on = document.getElementById('setting-netwatch-on');
     const hosts = document.getElementById('setting-netwatch-hosts');
-    return { enabled: !!(on && on.classList.contains('active')), hosts: hosts ? hosts.value.trim() : '' };
+    const time = document.getElementById('setting-netwatch-time');
+    const method = document.getElementById('setting-netwatch-method');
+    return { enabled: !!(on && on.classList.contains('active')), hosts: hosts ? hosts.value.trim() : '',
+             time_servers: time ? time.value.trim() : '', method: method ? method.value : 'ntp' };
+}
+
+// Only the list of the method chosen is shown.
+function showNetwatchMethod() {
+    const method = document.getElementById('setting-netwatch-method');
+    if (!method) return;
+    document.getElementById('setting-netwatch-time-row').hidden = method.value !== 'ntp';
+    document.getElementById('setting-netwatch-hosts-row').hidden = method.value !== 'tcp';
+    document.getElementById('setting-netwatch-result').hidden = true;
+}
+
+// Settings > System Setup > Internet check > Test: each server in the box (saved
+// or not) asked once now, with how long it took - a dead server would
+// otherwise read as no internet.
+async function testNetwatchServers() {
+    const method = document.getElementById('setting-netwatch-method').value;
+    const box = document.getElementById(method === 'ntp' ? 'setting-netwatch-time' : 'setting-netwatch-hosts');
+    const out = document.getElementById('setting-netwatch-result');
+    out.hidden = false;
+    out.textContent = 'Testing…';
+    try {
+        const res = await fetch('/api/netwatch/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ method, servers: box.value.trim() || box.placeholder })
+        }).then(r => r.json());
+        if (res.status !== 'success') { out.textContent = res.error || 'Test failed'; return; }
+        out.innerHTML = res.results.map(r => r.ok
+            ? `<span style="color:#3fb950">✓</span> ${escapeHtml(r.server)} answers (${r.ms} ms)`
+            : `<span style="color:#f85149">✗</span> ${escapeHtml(r.server)} does not answer`).join(' · ');
+    } catch (e) {
+        out.textContent = `Test failed: ${e.message}`;
+    }
 }
 
 function updatePopupOn() {
@@ -10921,7 +11069,7 @@ async function runSelfUpdate(restart) {
 
 // rBrowser's version on the empty pages of the clients (version.txt, via
 // /api/version): "rBrowser v2.0.0" and the client's name under it, as its title.
-let RB_VERSION = '2.0.4b';
+let RB_VERSION = '2.0.5b';
 
 function clientWelcome(icon, name) {
     return `<div class="client-welcome"><h2 class="rb-version">rBrowser v${RB_VERSION}</h2>
@@ -11090,7 +11238,7 @@ function cacheSearchMax() {
 const CACHE_SEARCH_CONTROLS = `
         <div class="cache-search-bar">
             <div class="msg-search-box">
-                <input type="text" id="cache-search-input" class="cache-search-input"
+                <input aria-label="Search the cache" type="text" id="cache-search-input" class="cache-search-input"
                        placeholder="Words, a node name, an operator, a hash or a page path" autocomplete="off">
                 <button class="search-clear msg-search-clear" id="cache-search-clear" type="button" hidden
                         title="Clear the search" aria-label="Clear the search">×</button>
@@ -11455,6 +11603,8 @@ function renderIdentitySettings() {
         ${profileRows}
         <div class="settings-row settings-cache-buttons">
             <button class="settings-export" onclick="createIdentity()">New identity</button>
+            <button class="settings-export" id="vanity-button" onclick="openVanityDialog()"
+                    title="An identity whose LXMF address starts with characters you choose">Generate vanity address</button>
             <button class="settings-export" onclick="importIdentity()">Import identity file</button>
             <button class="settings-export" onclick="window.location='/api/identities/export-all'"
                     title="Download every saved identity in one zip (private keys)">Export all</button>
@@ -11514,6 +11664,7 @@ function renderIdentitySettings() {
     body.querySelector('#ephemeral-mode').value = s.ephemeral_mode;
     const interval = body.querySelector('#ephemeral-interval');
     if (interval) interval.value = String(s.ephemeral_interval);
+    updateVanityButton();
     renderAutoIdentifySettings();
 }
 
@@ -11527,7 +11678,7 @@ function renderAutoIdentifySettings() {
     const rows = s.bindings.map(b => `
         <div class="identity-binding">
             <span class="binding-node" title="${b.node}">${escapeHtml(b.node_name || b.node.slice(0, 16) + '…')}</span>
-            <select class="settings-select" data-node="${b.node}"
+            <select name="binding-${b.node}" aria-label="Identity for this node" class="settings-select" data-node="${b.node}"
                     onchange="setBinding('${b.node}', this.value)">
                 ${b.profile_id === 'ephemeral' ? '<option value="ephemeral">Ephemeral (not kept)</option>' : ''}
                 ${choices}
@@ -11683,6 +11834,463 @@ function formatInterval(seconds) {
     const m = Math.floor(seconds / 60), s = seconds % 60;
     return s ? `${m} min ${s} s` : `${m} min`;
 }
+
+// ─────────────────────────────────────────────────────────────
+// Vanity address: an identity whose LXMF address starts with chosen
+// characters (rbrowser/vanity.py). The search runs on the server and goes on
+// with the dialog closed: a pill in the corner shows it and opens the
+// dialog again, also after a page reload.
+// ─────────────────────────────────────────────────────────────
+
+let vanityState = null;
+let vanityTimer = null;
+let vanityEstimateTimer = null;
+
+// Letters that are not hex, as the digit they look like: "coffee" -> "c0ffee".
+const VANITY_LOOKALIKE = { o: '0', i: '1', l: '1', s: '5', t: '7', g: '9', z: '2' };
+const VANITY_IDEAS = ['ace', 'c4f3', 'cafe', 'c0de', 'f00d', 'face', 'decaf', 'c0ffee'];
+// What the prefix goes on (rbrowser/vanity.py KINDS): one per search.
+const VANITY_KINDS = {
+    lxmf: { label: 'LXMF address', short: 'an LXMF address', note: 'Your contact address: LXMF messages, NomadNet' },
+    identity: { label: 'Identity hash', short: 'an identity hash', note: 'Shown on the Reticulum network or next to your nick on RRC' },
+};
+// Where the characters go (vanity.py POSITIONS): the same work either way.
+const VANITY_POSITIONS = {
+    start: { label: 'Prefix', verb: 'starts with', note: 'c0ffee3a91…' },
+    end: { label: 'Suffix', verb: 'ends with', note: '…3a91c0ffee' },
+};
+const VANITY_CHOICE_KEYS = { kind: 'rbrowser_vanity_kind', pos: 'rbrowser_vanity_pos' };
+
+function vanityKind() {
+    try { return localStorage.getItem(VANITY_CHOICE_KEYS.kind) === 'identity' ? 'identity' : 'lxmf'; }
+    catch (e) { return 'lxmf'; }
+}
+
+function vanityPos() {
+    try { return localStorage.getItem(VANITY_CHOICE_KEYS.pos) === 'end' ? 'end' : 'start'; }
+    catch (e) { return 'start'; }
+}
+
+function vanityFieldLabel() {
+    return `${VANITY_KINDS[vanityKind()].label} ${VANITY_POSITIONS[vanityPos()].verb}`;
+}
+
+function vanityChoices(group, options, current, label) {
+    return `
+        <div class="settings-label">${label}</div>
+        <div class="vanity-kinds" role="radiogroup" aria-label="${label}">
+            ${Object.entries(options).map(([key, o]) => `
+            <button type="button" class="vanity-kind${key === current ? ' active' : ''}" data-choice="${group}"
+                    data-value="${key}" role="radio" aria-checked="${key === current}">
+                <strong>${o.label}</strong><span${group === 'pos' ? ' class="mono"' : ''}>${o.note}</span>
+            </button>`).join('')}
+        </div>`;
+}
+
+function vanityDuration(seconds) {
+    if (seconds === null || seconds === undefined || !isFinite(seconds)) return '?';
+    if (seconds < 1) return 'under a second';
+    if (seconds < 90) return `${Math.round(seconds)} s`;
+    if (seconds < 5400) return `${Math.round(seconds / 60)} min`;
+    if (seconds < 172800) return `${(seconds / 3600).toFixed(1)} h`;
+    return `${Math.round(seconds / 86400)} days`;
+}
+
+async function vanityFetch(url, body) {
+    const options = body === undefined ? {} : {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+    const response = await fetch(url, options);
+    const data = await response.json().catch(() => ({ status: 'error', error: `HTTP ${response.status}` }));
+    if (data.status !== 'success') throw new Error(data.error || 'Request failed');
+    return data;
+}
+
+function vanityApply(state) {
+    vanityState = state;
+    updateVanityPill();
+    updateVanityButton();
+    if (document.getElementById('vanity-modal')) renderVanityDialog();
+    scheduleVanityPoll();
+    return state;
+}
+
+// Every second with the dialog open, every 4 s with only the pill.
+function scheduleVanityPoll() {
+    clearTimeout(vanityTimer);
+    if (!vanityState || vanityState.state !== 'running') return;
+    const open = !!document.getElementById('vanity-modal');
+    vanityTimer = setTimeout(() => {
+        vanityFetch('/api/vanity').then(vanityApply).catch(() => scheduleVanityPoll());
+    }, open ? 1000 : 4000);
+}
+
+function updateVanityButton() {
+    const button = document.getElementById('vanity-button');
+    if (!button) return;
+    const state = vanityState ? vanityState.state : 'idle';
+    button.textContent = state === 'running' ? 'Vanity search running…'
+                       : state === 'found' ? 'Vanity address found ✓'
+                       : 'Generate vanity address';
+    button.classList.toggle('vanity-found-button', state === 'found');
+}
+
+function updateVanityPill() {
+    const s = vanityState;
+    let pill = document.getElementById('vanity-pill');
+    const show = s && ['running', 'found', 'error'].includes(s.state)
+                 && !document.getElementById('vanity-modal');
+    if (!show) { if (pill) pill.remove(); return; }
+    if (!pill) {
+        pill = document.createElement('button');
+        pill.id = 'vanity-pill';
+        pill.type = 'button';
+        pill.onclick = openVanityDialog;
+        document.body.appendChild(pill);
+    }
+    pill.className = `vanity-pill ${s.state}`;
+    pill.textContent = s.state === 'found' ? `✓ ${s.prefix}… found`
+                     : s.state === 'error' ? 'Vanity search stopped'
+                     : `🔍 ${s.kind === 'identity' ? 'ID ' : ''}${s.position === 'end' ? '…' + s.prefix : s.prefix + '…'} ${vanityDuration(s.elapsed)}`;
+    pill.title = 'Vanity address search: click to open';
+}
+
+function openVanityDialog() {
+    if (document.getElementById('vanity-modal')) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'auto-reload-modal vanity-modal';
+    overlay.id = 'vanity-modal';
+    overlay.innerHTML = `
+        <div class="auto-reload-dialog favorite-dialog vanity-dialog" role="dialog" aria-labelledby="vanity-title">
+            <div class="dialog-header">
+                <h3 id="vanity-title">Custom address generator</h3>
+                <button class="modal-close" type="button" title="Close" aria-label="Close">&times;</button>
+            </div>
+            <div class="vanity-body"></div>
+        </div>`;
+    overlay.querySelector('.modal-close').onclick = closeVanityDialog;
+    overlay.addEventListener('click', e => { if (e.target === overlay) closeVanityDialog(); });
+    document.addEventListener('keydown', vanityKey, true);
+    document.body.appendChild(overlay);
+    updateVanityPill();
+    renderVanityDialog(true);
+    vanityFetch('/api/vanity').then(vanityApply).catch(() => {});
+}
+
+function vanityKey(e) {
+    if (e.key === 'Escape' && document.getElementById('vanity-modal')
+        && !document.querySelector('.choice-modal')) {
+        e.stopPropagation();
+        closeVanityDialog();
+    }
+}
+
+// Closing never stops a search: it goes on in the background.
+function closeVanityDialog() {
+    const overlay = document.getElementById('vanity-modal');
+    if (overlay) overlay.remove();
+    document.removeEventListener('keydown', vanityKey, true);
+    clearTimeout(vanityEstimateTimer);
+    updateVanityPill();
+    scheduleVanityPoll();
+}
+
+function renderVanityDialog(force = false) {
+    const body = document.querySelector('#vanity-modal .vanity-body');
+    if (!body) return;
+    const s = vanityState || { state: 'idle' };
+    if (force || body.dataset.mode !== s.state) {
+        body.dataset.mode = s.state;
+        ({ idle: renderVanityIdle, running: renderVanityRunning,
+           found: renderVanityFound, error: renderVanityError }[s.state] || renderVanityIdle)(body, s);
+    } else if (s.state === 'running') {
+        updateVanityProgress(body, s);
+    }
+    const slot = body.querySelector('.vanity-machine-slot');
+    if (slot) slot.innerHTML = vanityMachine(s);
+}
+
+// Which machine does the work: the rBrowser server, not this device.
+function vanityMachine(s) {
+    if (!s || !s.threads) return '';
+    const small = s.threads <= 4;
+    return `
+        <div class="vanity-machine">
+            <div>Runs on the computer where rBrowser runs: <strong>${escapeHtml(s.host || 'this server')}</strong></div>
+            <div>Uses ${s.workers} of its ${s.threads} CPU threads, at low priority</div>
+            ${small ? `<div class="vanity-machine-warn">Few cores here: keep to 4-5 characters,
+                longer searches can take hours.</div>` : ''}
+        </div>`;
+}
+
+function renderVanityIdle(body, s) {
+    body.innerHTML = `
+        <p class="vanity-lead">Make a new identity whose LXMF address or identity hash starts or ends with
+            characters you choose, like <span class="mono vanity-prefix">c4f3</span>3a91… or
+            …3a91<span class="mono vanity-prefix">c4f3</span> (a "vanity address").</p>
+        <p class="vanity-intro">An address comes from the keys: it cannot be chosen, only searched for.
+            rBrowser tries new keys until one gives an address with your characters.
+            The result is an ordinary identity, as safe as any other.</p>
+        <details class="vanity-info">
+            <summary>How it works</summary>
+            <p>The LXMF address and the identity hash are both hashes of the identity's public
+               keys. There is no way to work backwards from the address you want to a key, so
+               rBrowser makes random keys, millions of them, and keeps the first one that has
+               your characters at the start (prefix) or at the end (suffix): the same time either way.</p>
+            <p>The LXMF address is the one people write to, the most visible. The identity hash is
+               what RRC hubs show next to your nick. One per search: both at once would multiply
+               the time (6 characters on each, centuries). Make one of each if you like, then pick
+               them per client: the LXMF one under "Saved identity in use", the other in
+               Settings &gt; RRC Client &gt; Chat as.</p>
+            <p>Each character more makes it 16 times longer: 4 take seconds, 6 minutes,
+               8 a day or more on a fast PC. It is luck, not progress: the search can end
+               in the first second or take three times the average.</p>
+            <p>It needs computing power. The work is done by the computer that runs rBrowser,
+               not by the device you are looking at this page on. On a small board
+               (Raspberry Pi Zero, old phones) keep to short prefixes, or run the search on a
+               PC and move the identity with Export / Import.</p>
+            <p>Nothing is saved until you press Save; the key found stays in memory until then.</p>
+        </details>
+        <div class="vanity-machine-slot"></div>
+        ${vanityChoices('kind', VANITY_KINDS, vanityKind(), 'Search customization on')}
+        ${vanityChoices('pos', VANITY_POSITIONS, vanityPos(), 'Position')}
+        <label class="settings-label" for="vanity-prefix" id="vanity-prefix-label">${vanityFieldLabel()}</label>
+        <input aria-label="Text to search for" type="text" id="vanity-prefix" class="favorite-input favorite-input-mono" maxlength="8"
+               placeholder="e.g. c4f3" autocomplete="off" spellcheck="false">
+        <div class="favorite-field-note" id="vanity-note">Only 0-9 and a-f. Each character more takes 16 times longer.</div>
+        <div class="vanity-ideas">${VANITY_IDEAS.map(idea =>
+            `<button type="button" class="vanity-idea mono" data-idea="${idea}">${idea}</button>`).join('')}</div>
+        <div class="vanity-estimate" id="vanity-estimate"></div>
+        <div class="auto-reload-actions">
+            <button class="btn-cancel" type="button" data-act="cancel">Cancel</button>
+            <button class="btn-save" type="button" data-act="start" disabled>Start address search</button>
+        </div>`;
+    const input = body.querySelector('#vanity-prefix');
+    const note = body.querySelector('#vanity-note');
+    const estimate = body.querySelector('#vanity-estimate');
+    const start = body.querySelector('[data-act="start"]');
+
+    const check = () => {
+        const text = input.value.trim().toLowerCase();
+        note.className = 'favorite-field-note';
+        estimate.textContent = '';
+        estimate.className = 'vanity-estimate';
+        start.disabled = true;
+        clearTimeout(vanityEstimateTimer);
+        if (!text) {
+            note.textContent = 'Only 0-9 and a-f. Each character more takes 16 times longer.';
+            return;
+        }
+        const bad = [...new Set(text.replace(/[0-9a-f]/g, ''))];
+        if (bad.length) {
+            note.classList.add('is-error');
+            const lookalike = text.replace(/[^0-9a-f]/g, ch => VANITY_LOOKALIKE[ch] || ch);
+            note.innerHTML = `Not hex: ${escapeHtml(bad.join(' '))}. `
+                + (/^[0-9a-f]+$/.test(lookalike)
+                    ? `Try <button type="button" class="vanity-idea mono" data-idea="${lookalike}">${lookalike}</button>`
+                    : 'Only 0-9 and a-f.');
+            return;
+        }
+        note.textContent = `${text.length} of 8 characters at most`;
+        estimate.textContent = 'Estimating the time… The first time rBrowser measures the speed of this computer: a few seconds.';
+        vanityEstimateTimer = setTimeout(() => {
+            vanityFetch('/api/vanity/estimate', { prefix: text }).then(est => {
+                if (input.value.trim().toLowerCase() !== text) return;   // typed on since
+                estimate.innerHTML = `About <strong>${vanityDuration(est.seconds)}</strong> on average
+                    (${est.expected.toLocaleString()} tries, ${est.workers} cores at
+                    ${est.rate.toLocaleString()}/s). Luck decides: it can take half or three times as long.`
+                    + (est.slow ? '<br>Long search: the CPU stays busy for all that time.' : '');
+                estimate.classList.toggle('slow', !!est.slow);
+                start.disabled = false;
+            }).catch(e => {
+                note.classList.add('is-error');
+                note.textContent = e.message;
+            });
+        }, 250);
+    };
+
+    // onclick, not addEventListener: the body is reused by every view.
+    body.onclick = e => {
+        const idea = e.target.closest('[data-idea]');
+        if (idea) { input.value = idea.dataset.idea; check(); input.focus(); return; }
+        const choice = e.target.closest('[data-choice]');
+        if (choice) {
+            const group = choice.dataset.choice;
+            try { localStorage.setItem(VANITY_CHOICE_KEYS[group], choice.dataset.value); } catch (err) {}
+            body.querySelectorAll(`[data-choice="${group}"]`).forEach(b => {
+                const on = b === choice;
+                b.classList.toggle('active', on);
+                b.setAttribute('aria-checked', on);
+            });
+            body.querySelector('#vanity-prefix-label').textContent = vanityFieldLabel();
+            input.focus();
+            return;
+        }
+        const act = e.target.closest('[data-act]');
+        if (!act) return;
+        if (act.dataset.act === 'cancel') closeVanityDialog();
+        if (act.dataset.act === 'start' && !start.disabled) {
+            start.disabled = true;
+            vanityFetch('/api/vanity/start', { prefix: input.value.trim().toLowerCase(), kind: vanityKind(), position: vanityPos() })
+                .then(vanityApply)
+                .catch(err => { note.classList.add('is-error'); note.textContent = err.message; start.disabled = false; });
+        }
+    };
+    input.addEventListener('input', check);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') start.click(); });
+    input.focus();
+}
+
+function renderVanityRunning(body, s) {
+    body.onclick = null;
+    body.innerHTML = `
+        <div class="vanity-target">Searching for ${(VANITY_KINDS[s.kind] || VANITY_KINDS.lxmf).short} that
+            ${(VANITY_POSITIONS[s.position] || VANITY_POSITIONS.start).verb}
+            <span class="mono vanity-prefix">${escapeHtml(s.prefix)}</span></div>
+        <div class="vanity-bar" title="Chance it would be found by now">
+            <div class="vanity-bar-fill"></div></div>
+        <div class="vanity-stats">
+            <span>Tries</span><span data-v="tries"></span>
+            <span>Speed</span><span data-v="rate"></span>
+            <span>Elapsed</span><span data-v="elapsed"></span>
+            <span>Average time</span><span data-v="average"></span>
+        </div>
+        <div class="settings-hint vanity-luck" data-v="luck"></div>
+        <div class="vanity-machine-slot"></div>
+        <div class="auto-reload-actions">
+            <button class="btn-cancel choice-danger" type="button" data-act="stop">Stop search</button>
+            <button class="btn-save" type="button" data-act="background">Continue in background</button>
+        </div>`;
+    body.querySelector('[data-act="background"]').onclick = closeVanityDialog;
+    body.querySelector('[data-act="stop"]').onclick = () =>
+        vanityFetch('/api/vanity/stop', {}).then(vanityApply)
+            .catch(e => showNotification(`Could not stop: ${escapeHtml(e.message)}`, 'error', 5000));
+    updateVanityProgress(body, s);
+}
+
+function updateVanityProgress(body, s) {
+    const set = (key, text) => { const el = body.querySelector(`[data-v="${key}"]`); if (el) el.textContent = text; };
+    const percent = Math.min(100, Math.round(s.chance * 100));
+    const fill = body.querySelector('.vanity-bar-fill');
+    if (fill) fill.style.width = `${percent}%`;
+    set('tries', `${s.tries.toLocaleString()} of ~${s.expected.toLocaleString()} on average`);
+    set('rate', s.rate ? `${s.rate.toLocaleString()}/s on ${s.workers} cores` : 'starting…');
+    set('elapsed', vanityDuration(s.elapsed));
+    set('average', s.average_seconds ? vanityDuration(s.average_seconds) : '…');
+    set('luck', `By now it would have been found ${percent}% of the time. Every try has the same chance,
+        so there is no fixed time left: it may come in the next second or take a while longer.`);
+}
+
+function renderVanityFound(body, s) {
+    const atEnd = s.position === 'end';
+    const rest = atEnd ? s.address.slice(0, s.address.length - s.prefix.length) : s.address.slice(s.prefix.length);
+    const mark = `<strong>${escapeHtml(s.prefix)}</strong>`;
+    const onIdentity = s.kind === 'identity';
+    const kindLabel = (VANITY_KINDS[s.kind] || VANITY_KINDS.lxmf).label;
+    body.onclick = null;
+    body.innerHTML = `
+        <div class="vanity-target">Found after ${s.tries.toLocaleString()} tries in ${vanityDuration(s.elapsed)}</div>
+        <div class="settings-label">${kindLabel}</div>
+        <div class="vanity-address mono" title="${kindLabel}">${atEnd ? escapeHtml(rest) + mark : mark + escapeHtml(rest)}</div>
+        <label class="settings-label" for="vanity-name">Name</label>
+        <input aria-label="Identity name" type="text" id="vanity-name" class="favorite-input" maxlength="40"
+               value="Vanity ${onIdentity ? 'ID ' : ''}${atEnd ? '…' : ''}${escapeHtml(s.prefix)}" autocomplete="off">
+        <div class="favorite-field-note">Not saved yet: Discard loses this key for good.</div>
+        ${onIdentity ? `<div class="settings-hint vanity-export-hint">For RRC: after Save, pick it in
+            Settings &gt; RRC Client &gt; Chat as (or for one hub only), then connect again.</div>` : ''}
+        <div class="settings-hint vanity-export-hint">Export downloads the key file without saving it here:
+            for another rBrowser (Import identity file), NomadNet or MeshChat. It is a private key, keep it safe.</div>
+        <div class="auto-reload-actions">
+            <button class="btn-cancel choice-danger" type="button" data-act="discard">Discard</button>
+            <button class="btn-cancel" type="button" data-act="again"
+                    title="Another address with the same start: this one is lost unless saved or exported">Search again</button>
+            <button class="btn-cancel" type="button" data-act="export"
+                    title="Download the key file only, without saving it in this rBrowser">Export</button>
+            <button class="btn-cancel" type="button" data-act="save">Save</button>
+            <button class="btn-save" type="button" data-act="use">Save and use now</button>
+        </div>`;
+    const name = body.querySelector('#vanity-name');
+    const save = async (activate) => {
+        try {
+            const state = await identityRequest('/api/vanity/save', { name: name.value.trim(), activate });
+            const created = state.profiles.find(p => p.id === state.created);
+            await vanityFetch('/api/vanity').then(vanityApply);
+            closeVanityDialog();
+            showNotification(`Saved <strong>${escapeHtml(created ? created.name : name.value)}</strong>`
+                + (activate ? ' and now in use.' : '. Select it under "Saved identity in use" to use it.'),
+                'success', 5000);
+        } catch (e) {
+            showNotification(`Could not save: ${escapeHtml(e.message)}`, 'error', 5000);
+        }
+    };
+    // The same download as Settings > Export. The result stays: it can still
+    // be saved here too, or discarded once the file is safe.
+    body.querySelector('[data-act="export"]').onclick = () => {
+        window.location = '/api/vanity/export';
+        showNotification('Key file downloaded. Import it in the other rBrowser with "Import identity file".'
+                         + ' Discard it here if you do not want it in this one.', 'success', 6000);
+    };
+    // Same prefix, a new address: the rest of it is different every time.
+    body.querySelector('[data-act="again"]').onclick = async () => {
+        const choice = await showChoiceDialog({
+            title: 'Search again?',
+            html: `A new address that ${(VANITY_POSITIONS[s.position] || VANITY_POSITIONS.start).verb} <code>${escapeHtml(s.prefix)}</code>.
+                   <code>${escapeHtml(s.address)}</code> is not saved: it is lost unless you export it first.`,
+            buttons: [{ label: 'Cancel', value: null },
+                      { label: 'Export first', value: 'export' },
+                      { label: 'Search again', value: 'again', primary: true }]
+        });
+        if (choice === 'export') { window.location = '/api/vanity/export'; return; }
+        if (choice !== 'again') return;
+        try {
+            await vanityFetch('/api/vanity/stop', {});
+            vanityApply(await vanityFetch('/api/vanity/start', { prefix: s.prefix, kind: s.kind, position: s.position }));
+        } catch (e) {
+            showNotification(`Could not search again: ${escapeHtml(e.message)}`, 'error', 5000);
+            vanityFetch('/api/vanity').then(vanityApply).catch(() => {});
+        }
+    };
+    body.querySelector('[data-act="save"]').onclick = () => save(false);
+    body.querySelector('[data-act="use"]').onclick = () => save(true);
+    body.querySelector('[data-act="discard"]').onclick = async () => {
+        const choice = await showChoiceDialog({
+            title: 'Discard this address?',
+            html: `<code>${escapeHtml(s.address)}</code> is not saved: once discarded it cannot be found again.`,
+            buttons: [{ label: 'Cancel', value: null }, { label: 'Discard', value: 'discard', danger: true }]
+        });
+        if (choice !== 'discard') return;
+        vanityFetch('/api/vanity/stop', {}).then(vanityApply).catch(() => {});
+    };
+    name.focus();
+    name.select();
+}
+
+function renderVanityError(body, s) {
+    body.onclick = null;
+    body.innerHTML = `
+        <div class="favorite-field-note is-error vanity-error">The search stopped: ${escapeHtml(s.error || 'unknown error')}</div>
+        <div class="settings-hint">Nothing was lost: no key had been found yet.</div>
+        <div class="auto-reload-actions">
+            <button class="btn-cancel" type="button" data-act="close">Close</button>
+            <button class="btn-cancel" type="button" data-act="new">New search</button>
+            <button class="btn-save" type="button" data-act="retry">Retry ${escapeHtml(s.prefix || '')}</button>
+        </div>`;
+    body.querySelector('[data-act="close"]').onclick = closeVanityDialog;
+    body.querySelector('[data-act="new"]').onclick = () =>
+        vanityFetch('/api/vanity/stop', {}).then(vanityApply).catch(() => {});
+    body.querySelector('[data-act="retry"]').onclick = async () => {
+        try {
+            await vanityFetch('/api/vanity/stop', {});
+            vanityApply(await vanityFetch('/api/vanity/start', { prefix: s.prefix, kind: s.kind, position: s.position }));
+        } catch (e) {
+            showNotification(`Could not start: ${escapeHtml(e.message)}`, 'error', 5000);
+            vanityFetch('/api/vanity').then(vanityApply).catch(() => {});
+        }
+    };
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    vanityFetch('/api/vanity').then(vanityApply).catch(() => {});
+});
 
 // Timed ephemeral: the server changes the identity on its own. Read the
 // new state when it is due, so the identity button and settings show the
@@ -11965,6 +12573,53 @@ async function doRestart(target, origin) {
         <a href="${escapeHtml(origin)}/">Try ${escapeHtml(origin)}</a>`;
 }
 
+async function confirmShutdown() {
+    try {
+        const response = await fetch('/api/server-settings');
+        serverSettingsState = await response.json();
+    } catch (e) {
+        showNotification(`Cannot reach rBrowser: ${escapeHtml(e.message)}`, 'error', 5000);
+        return;
+    }
+    if (!serverSettingsState.can_restart) {
+        showNotification('This rBrowser was not started with rBrowser.py: stop it from '
+                         + 'Docker / waitress-serve.', 'warning', 6000);
+        return;
+    }
+    let html = `rBrowser stops: the web server, Reticulum links, chats and downloads in
+                progress. This page and the other tabs stop working until you start it again.`;
+    if (!isLoopbackHost(location.hostname)) {
+        html += `<div class="choice-warning">You are connected from another device: rBrowser can
+                 only be started again on the computer that runs it.</div>`;
+    }
+    const choice = await showChoiceDialog({
+        title: 'Shut down rBrowser?',
+        html,
+        buttons: [{ label: 'Cancel', value: null },
+                  { label: 'Shut down', value: 'shutdown', danger: true }]
+    });
+    if (choice !== 'shutdown') return;
+
+    try {
+        const response = await fetch('/api/shutdown', { method: 'POST' });
+        const data = await response.json();
+        if (data.status !== 'success') throw new Error(data.error || 'Refused');
+    } catch (e) {
+        showNotification(`The shutdown could not be started: ${escapeHtml(e.message)}`, 'error', 6000);
+        return;
+    }
+    closeSettings();
+    const overlay = document.createElement('div');
+    overlay.className = 'auto-reload-modal choice-modal restart-overlay';
+    overlay.innerHTML = `
+        <div class="auto-reload-dialog choice-dialog">
+            <h3>rBrowser is shut down</h3>
+            <div class="choice-body">To start it again, in its folder: <code>python rBrowser.py</code>
+                (as a service: <code>sudo systemctl start rbrowser</code>), then reload this page.</div>
+        </div>`;
+    document.body.appendChild(overlay);
+}
+
 // Save keeps the dialog open (Close, x and Escape close it); from the
 // "Save your changes?" question it saves and closes.
 function saveSettings({ close = false } = {}) {
@@ -12068,6 +12723,11 @@ function saveSettings({ close = false } = {}) {
     if (notifications) {
         try { localStorage.setItem(NOTIFICATIONS_KEY, notifications.value); } catch (e) {}
     }
+    const statusBar = document.getElementById('setting-statusbar');
+    if (statusBar) {
+        try { localStorage.setItem(STATUSBAR_KEY, statusBar.value); } catch (e) {}
+        applyStatusBarPos(statusBar.value);
+    }
     saveSoundSettingsFromDialog();
 
     // Internet check (rbrowser/netwatch.py): only sent when it changed.
@@ -12085,6 +12745,7 @@ function saveSettings({ close = false } = {}) {
                     return;
                 }
                 document.getElementById('setting-netwatch-hosts').value = res.hosts;
+                document.getElementById('setting-netwatch-time').value = res.time_servers;
                 netwatchOn.dataset.loaded = JSON.stringify(readNetwatchChoice());
             }).catch(err => showNotification(`Internet check not saved: ${escapeHtml(err.message)}`, 'error', 5000));
         }
@@ -12147,7 +12808,7 @@ function showAutoReloadSettings() {
         
         <div class="auto-reload-setting">
             <div class="auto-reload-toggle">
-                <label>Enable Auto-Reload</label>
+                <span class="auto-reload-heading">Enable Auto-Reload</span>
                 <div class="toggle-switch ${tab.autoReloadEnabled ? 'active' : ''}" onclick="toggleAutoReloadInModal()">
                     <div class="toggle-slider"></div>
                 </div>
@@ -12155,7 +12816,7 @@ function showAutoReloadSettings() {
         </div>
         
         <div class="auto-reload-setting" id="interval-setting" style="${tab.autoReloadEnabled ? '' : 'opacity: 0.5; pointer-events: none;'}">
-            <label>Reload Interval (seconds)</label>
+            <label for="reload-interval-input">Reload Interval (seconds)</label>
             <input type="number" class="interval-input" id="reload-interval-input" 
                    min="5" max="3600" value="${tab.autoReloadInterval}"
                    placeholder="Enter seconds (5-3600)">
@@ -13473,6 +14134,62 @@ function toggleNodeListPause() {
     if (!nodeListPaused) updateNodes();
 }
 
+// The status bar (index.html): one line across the window, at the top or
+// at the bottom (Settings > System Setup). The server already writes the class
+// into <body> from settings/ui_prefs.json, so the page does not jump.
+const STATUSBAR_KEY = 'rbrowser_statusbar_pos';
+
+function getStatusBarPos() {
+    try { return localStorage.getItem(STATUSBAR_KEY) === 'bottom' ? 'bottom' : 'top'; } catch (e) { return 'top'; }
+}
+
+function applyStatusBarPos(pos) {
+    document.body.classList.toggle('sb-bottom', pos === 'bottom');
+    document.body.classList.toggle('sb-top', pos !== 'bottom');
+    placeNotificationStack();
+}
+
+// What the clients that are on have heard, after the NomadNet counters
+// (the server leaves out a client that is off): the number is what came
+// live since rBrowser started, the tooltip adds what the client's list
+// holds (Reticulum's memory too).
+const PN_ICON = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="12" height="4.5" rx="1"/><rect x="2" y="9.5" width="12" height="4.5" rx="1"/><path d="M4.5 4.25h.01M4.5 11.75h.01"/></svg>';
+const GLOBE_ICON = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="8" cy="8" r="6.3"/><ellipse cx="8" cy="8" rx="2.7" ry="6.3"/><path d="M1.7 8h12.6M2.6 4.8h10.8M2.6 11.2h10.8"/></svg>';
+const HEARD_KINDS = [
+    ['lxmf', 'LXMF peers', () => typeof MSG_ICON !== 'undefined' ? MSG_ICON : '', 'Reticulum\'s memory, last 48 h'],
+    ['propagation', 'Propagation nodes', () => PN_ICON, 'the saved list'],
+    ['rrc', 'RRC hubs', () => typeof RRC_ICON !== 'undefined' ? RRC_ICON : '', 'Reticulum\'s memory, last 7 days'],
+    ['bbs', 'BBS servers', () => typeof BBS_ICON !== 'undefined' ? BBS_ICON : '', 'Reticulum\'s memory, last 7 days'],
+    ['rmap', 'RMAP nodes', () => GLOBE_ICON, ''],
+];
+
+function renderHeardStats(heard) {
+    const box = document.getElementById('sb-heard');
+    if (!box) return;
+    const html = HEARD_KINDS.filter(([key]) => heard && heard[key] != null).map(([key, label, icon, memory]) => {
+        const v = heard[key];
+        const tip = typeof v === 'number'
+            ? `${label}: ${v}, the nodes rmap.world lists, heard within the hours set in Settings > RMAP`
+            : `${label}: ${v.live} heard live since rBrowser started · ${v.known} known (${memory})`;
+        const n = typeof v === 'number' ? v : v.live;
+        return `<span class="sb-stat" title="${tip}"><span class="sb-ico">${icon()}</span><span class="sb-label">${label}:</span><span class="count">${n}</span></span>`;
+    }).join('');
+    if (box.dataset.html !== html) { box.dataset.html = html; box.innerHTML = html; }
+}
+
+// The clock in the status bar's corner: this computer's time, the date
+// in the tooltip.
+function tickStatusClock() {
+    const el = document.getElementById('sb-clock');
+    if (!el) return;
+    const d = new Date();
+    const p = n => String(n).padStart(2, '0');
+    el.textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    el.title = `Local time - ${d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}`;
+}
+tickStatusClock();
+setInterval(tickStatusClock, 1000);
+
 // CPU and RAM in the status bar: the Python
 // process of rBrowser (/api/usage) and, in Chrome/Edge, this page's own JS
 // memory. Every 10 s while the page is in sight; the same in About.
@@ -13483,14 +14200,14 @@ function usageText(u) {
 }
 
 async function refreshUsage() {
-    if (document.hidden || APP_WINDOW) return;
+    if (document.hidden) return;
     const u = await fetch('/api/usage').then(r => r.json()).catch(() => null);
     const badge = document.getElementById('sb-usage');
     if (badge) {
         const text = usageText(u);
         badge.hidden = !text;
         // Built like the rows above: grey label, blue value.
-        const stat = (label, value) => `<span class="sb-stat"><span class="sb-label">${label}:</span><span class="count">${value}</span></span>`;
+        const stat = (label, value) => `<span class="sb-stat"><span class="sb-label sb-keep">${label}:</span><span class="count">${value}</span></span>`;
         badge.innerHTML = text ? stat('CPU', `${u.cpu}%`) + stat('RAM', `${Math.round(u.rss_mb)} MB`)
             + (performance.memory ? stat('Page', `${Math.round(performance.memory.usedJSHeapSize / 1048576)} MB`) : '') : '';
         badge.title = text ? `rBrowser (Python, PID ${u.pid}): CPU ${u.cpu}% of the machine, RAM ${u.rss_mb} MB, ${u.threads} threads`

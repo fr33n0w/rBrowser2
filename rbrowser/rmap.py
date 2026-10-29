@@ -326,6 +326,16 @@ class Rmap:
                 "source": SOURCE_URL,
             }
 
+    def count(self) -> Optional[int]:
+        """How many nodes the list shows (heard within max_age_hours), for
+        the status bar; None while the integration is off."""
+        if not self.settings["enabled"]:
+            return None
+        with self.lock:
+            now = self.generated_ts or time.time()
+            cutoff = now - self.settings["max_age_hours"] * 3600
+            return sum(1 for n in self.nodes if (n.get("seen") or 0) >= cutoff)
+
     def listing(self) -> Dict[str, Any]:
         """The nodes heard within max_age_hours (by rmap's clock), newest
         first. Empty while the integration is off."""

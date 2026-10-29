@@ -20,6 +20,7 @@ chosen in Settings > Notifications and log (no restart):
 
 The page shows the same things as notifications, so the terminal can stay
 quiet. Every line shown starts with the time it was printed. The startup banner (rBrowser.py) is always printed.
+The blocks are set apart by one blank line (never two), not by lines of =.
 
 Saved in settings/console.json as {"categories": {...}}. The two old modes
 are presets: "full" is everything, "status" the three defaults. --log on
@@ -75,7 +76,7 @@ def category_of(line: str) -> str:
         return "rmap"
     if text.startswith(("💬", "📣", "🚫")):
         return "messenger"
-    if text.startswith(("🟢", "🔄", "⏳", "📡", "🔗 Connecting", "=" * 10)):
+    if text.startswith(("🟢", "🔴", "🔄", "⏳", "📡", "🔗 Connecting", "🔗 Internet check", "🌐 rBrowser")):
         return "connection"
     return "activity"
 
@@ -96,6 +97,7 @@ def stamped(args: tuple) -> tuple:
 
 class ConsoleLog:
     FILE = os.path.join("settings", "console.json")
+    _blank = True       # at start: no blank line first
 
     def __init__(self, path: Optional[str] = None) -> None:
         self.path = path or self.FILE
@@ -156,7 +158,20 @@ class ConsoleLog:
             _real_print(*args, **kwargs)
             return
         if self.keeps(args):
-            _real_print(*stamped(args), **kwargs)
+            self.say(*args, **kwargs)
+
+    def say(self, *args: Any, **kwargs: Any) -> None:
+        """Printed with the time, whatever the categories (rBrowser.py's own
+        lines go straight here). Never two blank lines in a row: the blocks
+        are set apart by one."""
+        first = str(args[0]) if args else ""
+        if not first.strip():
+            if self._blank:
+                return
+            self._blank = True
+        else:
+            self._blank = first.endswith("\n")
+        _real_print(*stamped(args), **kwargs)
 
 
 console = ConsoleLog()
