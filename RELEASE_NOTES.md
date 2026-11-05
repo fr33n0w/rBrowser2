@@ -3,6 +3,36 @@
 Everything that changed in each version, in full. The short list is in
 [CHANGELOG.md](CHANGELOG.md).
 
+## 2.0.6b
+
+### New
+
+- **App window** - `python3 rBrowser.py --app` opens rBrowser in a window of its own (pywebview), with a splash screen and the new logo. Phones and other computers still reach it in their browser.
+- **Reload button** - at the foot of the Settings categories, next to Restart and Shut down: reloads the page. The app window has no F5 or Ctrl+R.
+- **Autostart on boot** - Settings > System Setup, off by default: starts rBrowser when the computer starts (Windows, Linux, Raspberry Pi; macOS not tried on a real Mac yet).
+- **Downloads** - files from the same node wait in line, files from different nodes come at the same time; each row shows speed and time left, the panel shrinks to one line.
+- **File Downloads settings** - the download folder, "Ask where to save" and the list of downloaded and received files, to open, show or delete. With "Ask where to save" off the file goes straight into the folder and a small button stays at the bottom right: the name opens the file, the folder icon shows it in its folder, x closes it (on the computer running rBrowser).
+- **Battery** - the status bar shows the battery of the computer running rBrowser; opened from another device (a phone through the tunnel), the battery of that device where its browser tells it (Chrome and Edge), otherwise none.
+- **Flag emoji on Windows** - Windows has no flag glyphs, so Chrome, Edge and the app window showed "IT" for 🇮🇹. rBrowser now loads the Twemoji flags (78 KB, bundled, no internet needed) only where they are missing; Firefox, phones and Macs keep their own.
+- **RRC** - colours and effects in the chat, chat text size, emoji pages, `/unban` and `/unkline`, and a speaker button after the away moon that turns the RRC sounds off and on at once (popups stay).
+- **Top bar** - the version, and an update button when a new version is out.
+- **Running on** - System Setup and About list the addresses rBrowser answers on (network, tunnel, domain).
+- **`--info`** - shows in the terminal the state of the rBrowser already running.
+- **Access password** - a popup to set it, and Change password.
+- **Remote access** - FreeDNS (afraid.org) among the domain providers.
+- **Internet check** - an interval of your choice.
+- **Install guide** - PDF guides in English and Italian (`docs/`) for 2.0.6b, linked at the top of the README.
+
+### Changed
+
+- The RRC Default nick is on by default.
+- The short status bar is shorter still.
+
+### Fixed
+
+- Form fields named `name`, `title`, `action` and a few more lost their name (DOMPurify's DOM clobbering guard), so the node received them empty: a guestbook signed "Anonymous" whatever you wrote. They keep it now.
+- An `rnsd` started by another user refuses rBrowser ("digest sent was rejected"): the terminal and the status bar now say so, with the command for its `rpc_key` (README, Troubleshooting).
+
 ## 2.0.5b - 2026-10-29
 
 ### New

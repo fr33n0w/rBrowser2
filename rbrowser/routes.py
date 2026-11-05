@@ -77,6 +77,30 @@ _USAGE_PROC = None
 _USAGE_LAST = None        # (wall time, CPU time) of the last reading, without psutil
 
 
+def _battery(psutil):
+    """The battery of the machine rBrowser runs on (a notebook, a phone),
+    None on a desktop or where the system does not tell. Watts only where
+    Linux has them in /sys; Windows has no simple way to read them."""
+    try:
+        b = psutil.sensors_battery()
+    except Exception:
+        b = None
+    if b is None:
+        return None
+    out = {"percent": round(b.percent), "plugged": bool(b.power_plugged)}
+    try:
+        import glob
+        for folder in glob.glob("/sys/class/power_supply/BAT*"):
+            with open(os.path.join(folder, "power_now")) as f:
+                watts = int(f.read().strip()) / 1e6
+            if watts > 0:
+                out["watts"] = round(watts, 1)
+            break
+    except Exception:
+        pass
+    return out
+
+
 def _usage_without_psutil():
     """CPU (since the last reading, over all cores, as psutil gives it here)
     and resident memory of this process from os.times() and /proc/self/statm.
@@ -107,6 +131,16 @@ def register_routes(app, browser) -> None:
     from .auth import OPEN_PATHS, LOGIN_PAGE, guest_blocked
 
     auth = getattr(browser, "auth", None)
+
+    # Settings > File Downloads (rbrowser/files.py).
+    from .files import Files, is_local as _loopback
+    files = Files()
+
+    def is_local(address) -> bool:
+        # On this computer: the loopback, and not through the tunnel (which
+        # also arrives from 127.0.0.1).
+        from .remote import TUNNEL_MARK
+        return _loopback(address) and not request.environ.get(TUNNEL_MARK)
 
     def _safe_next(value: Any) -> str:
         """Only a path of this site: never //other.site or a full URL. Control
@@ -266,15 +300,18 @@ def register_routes(app, browser) -> None:
         if request.method == "GET":
             return jsonify({**auth.status(request.remote_addr),
                             "role": auth.role(session, request.remote_addr)})
-        res = auth.update(request.get_json(silent=True) or {}, request.remote_addr or "")
+        incoming = request.get_json(silent=True) or {}
+        # The tunnel puts rBrowser on the internet: the password stays on
+        # while it runs (it cannot start without one either).
+        remote = getattr(browser, "remote", None)
+        if remote is not None and remote.settings.get("tunnel_on") and "enabled" in incoming and not incoming["enabled"]:
+            return jsonify({"status": "error", "error": "Switch the Remote access tunnel off first (below): "
+                                                        "while it runs anyone on the internet could open rBrowser"}), 400
+        res = auth.update(incoming, request.remote_addr or "")
         if res.get("status") == "success":
             # Whoever just set it stays in, with the new password's tag.
             session.permanent = True
             session["auth"] = res.pop("tag")
-            # Password off: the tunnel goes off with it.
-            remote = getattr(browser, "remote", None)
-            if remote is not None and not res.get("enabled") and remote.settings.get("tunnel_on"):
-                remote.update({"tunnel_on": False})
         return jsonify(res), (200 if res.get("status") == "success" else 400)
 
     @app.route("/api/remote", methods=["GET", "POST"])
@@ -882,7 +919,57 @@ def register_routes(app, browser) -> None:
                                              payload.get("local_name")))
             except ValueError as exc:
                 return jsonify({"status": "error", "error": str(exc)}), 400
-        return jsonify(settings.describe())
+        described = settings.describe()
+        # "running on" also lists the internet addresses of Remote access.
+        if described.get("addresses"):
+            described["addresses"]["public"] = _public_addresses(settings)
+        return jsonify(described)
+
+    @app.route("/api/autostart", methods=["GET", "POST"])
+    def api_autostart():
+        """Settings > System Setup > Autostart on boot (rbrowser/autostart.py)."""
+        from . import autostart
+        if request.method == "POST":
+            payload = request.get_json(silent=True) or {}
+            try:
+                return jsonify(autostart.set_on(bool(payload.get("on"))))
+            except (ValueError, OSError, autostart.subprocess.SubprocessError) as exc:
+                return jsonify({"status": "error", "error": str(exc)}), 400
+        return jsonify(autostart.status())
+
+    @app.route("/api/shortcuts", methods=["GET", "POST"])
+    def api_shortcuts():
+        """Settings > System Setup > Shortcuts (rbrowser/shortcuts.py)."""
+        from . import shortcuts
+        if request.method == "POST":
+            payload = request.get_json(silent=True) or {}
+            try:
+                return jsonify(shortcuts.set_on(str(payload.get("kind")), bool(payload.get("on"))))
+            except (ValueError, OSError) as exc:
+                return jsonify({"status": "error", "error": str(exc)}), 400
+        return jsonify(shortcuts.status())
+
+    def _public_addresses(settings):
+        remote = getattr(browser, "remote", None)
+        if remote is None:
+            return []
+        try:
+            s = remote.status()
+        except Exception:
+            return []
+        out = []
+        tunnel = s.get("tunnel") or {}
+        if tunnel.get("url"):
+            out.append({"kind": "Tunnel", "url": tunnel["url"]})
+        cfg = s.get("settings") or {}
+        if cfg.get("ddns_on") and cfg.get("ddns_domain"):
+            port = (settings.running or {}).get("port")
+            domain = cfg["ddns_domain"]
+            if cfg.get("ddns_provider") == "duckdns" and "." not in domain:
+                domain += ".duckdns.org"
+            out.append({"kind": "DDNS", "url": f"http://{domain}:{port}",
+                        "ok": (s.get("ddns") or {}).get("state") == "ok"})
+        return out
 
     @app.route("/api/node-list-settings", methods=["GET", "POST"])
     def api_node_list_settings():
@@ -970,6 +1057,17 @@ def register_routes(app, browser) -> None:
                 return jsonify({"status": "error", "error": str(exc)}), 400
         return jsonify(console.describe())
 
+    @app.route("/api/log")
+    def api_log():
+        """The last terminal lines, all categories, newer than ?after=N
+        (rBrowser --info follows them)."""
+        from .console_log import console
+        try:
+            after = int(request.args.get("after", 0))
+        except ValueError:
+            after = 0
+        return jsonify(console.recent(after))
+
     @app.route("/api/usage")
     def api_usage():
         """CPU and memory of this rBrowser's Python process (psutil, if it
@@ -983,7 +1081,7 @@ def register_routes(app, browser) -> None:
             usage = _usage_without_psutil()
             if usage is None:
                 return jsonify({"status": "error", "error": "psutil is not installed (pip install psutil)"})
-            return jsonify({"status": "success", **usage})
+            return jsonify({"status": "success", **usage, "local": is_local(request.remote_addr)})
         global _USAGE_PROC
         if _USAGE_PROC is None:
             _USAGE_PROC = psutil.Process()
@@ -994,7 +1092,8 @@ def register_routes(app, browser) -> None:
             cpu = p.cpu_percent(None) / (psutil.cpu_count() or 1)
             threads = p.num_threads()
         return jsonify({"status": "success", "pid": p.pid, "cpu": round(cpu, 1),
-                        "rss_mb": round(mem / 1048576, 1), "threads": threads})
+                        "rss_mb": round(mem / 1048576, 1), "threads": threads, "battery": _battery(psutil),
+                        "local": is_local(request.remote_addr)})
 
     @app.route("/api/ui-prefs", methods=["GET", "POST"])
     def api_ui_prefs():
@@ -1159,7 +1258,9 @@ def register_routes(app, browser) -> None:
         script_path = os.path.join("script", "micron-parser_original.js")
         if os.path.exists(script_path):
             print(f"✅ Serving micron parser from: {script_path}")
-            return send_from_directory("script", "micron-parser_original.js", mimetype="application/javascript")
+            response = send_from_directory("script", "micron-parser_original.js", mimetype="application/javascript")
+            response.headers["Cache-Control"] = "no-cache"
+            return response
         print(f"❌ Micron parser not found at: {script_path}")
         return "console.error('Micron parser file not found');", 404
 
@@ -1177,12 +1278,15 @@ def register_routes(app, browser) -> None:
         download_cancels[download_id] = token
 
         def do_download():
-            def progress_callback(progress):
+            # size: the file's size in bytes once the node has announced it,
+            # so the page can show how much, how fast and how long is left.
+            def progress_callback(progress, size=None):
                 if token.cancelled:
                     return
                 download_progress[download_id] = {
                     "progress": progress * 100,
-                    "status": "downloading"
+                    "status": "downloading",
+                    "size": size,
                 }
 
             try:
@@ -1203,7 +1307,8 @@ def register_routes(app, browser) -> None:
                     "content": response["content"],
                     "filename": response.get("filename") or file_path.split("/")[-1] or "download"
                 }
-                download_progress[download_id] = {"progress": 100, "status": "complete"}
+                download_progress[download_id] = {"progress": 100, "status": "complete",
+                                                  "size": len(response["content"])}
             else:
                 download_results[download_id] = {
                     "status": "error",
@@ -1223,6 +1328,70 @@ def register_routes(app, browser) -> None:
         thread.start()
         
         return jsonify({"download_id": download_id, "status": "started"})
+
+    @app.route("/api/download/keep/<download_id>", methods=["POST"])
+    def api_download_keep(download_id):
+        """Settings > File Downloads with "ask where to save" off: the file
+        goes straight into the download folder of this computer."""
+        result = download_results.get(download_id)
+        if not result or result.get("status") != "complete" or not result.get("content"):
+            return jsonify({"status": "error", "error": "Download not found"}), 404
+        try:
+            name = files.save(result["filename"], result["content"])
+        except OSError as exc:
+            return jsonify({"status": "error", "error": f"Could not save it: {exc}"}), 500
+        download_progress.pop(download_id, None)
+        download_results.pop(download_id, None)
+        return jsonify({"status": "success", "name": name, "folder": files.settings()["folder"]})
+
+    @app.route("/api/files/screenshot", methods=["POST"])
+    def api_files_screenshot():
+        """A page screenshot (PNG in the body) with "ask where to save" off:
+        into the download folder, like a NomadNet download."""
+        data = request.get_data(cache=False)
+        if not data.startswith(b"\x89PNG\r\n\x1a\n") or len(data) > 100 * 1024 * 1024:
+            return jsonify({"status": "error", "error": "Not a PNG screenshot"}), 400
+        name = str(request.args.get("name") or "screenshot.png")
+        if not name.lower().endswith(".png"):
+            name += ".png"
+        try:
+            name = files.save(name, data)
+        except OSError as exc:
+            return jsonify({"status": "error", "error": f"Could not save it: {exc}"}), 500
+        return jsonify({"status": "success", "name": name, "folder": files.settings()["folder"]})
+
+    # Settings > File Downloads (rbrowser/files.py). Never for guests
+    # (auth.GUEST_NEVER); Open and Show only from this computer.
+    @app.route("/api/files")
+    def api_files():
+        return jsonify({**files.list(), "local": is_local(request.remote_addr)})
+
+    @app.route("/api/files/settings", methods=["POST"])
+    def api_files_settings():
+        return jsonify(files.update(request.get_json(silent=True) or {}))
+
+    @app.route("/api/files/delete", methods=["POST"])
+    def api_files_delete():
+        data = request.get_json(silent=True) or {}
+        return jsonify(files.delete(data.get("kind"), data.get("rel"), getattr(browser, "messenger", None)))
+
+    @app.route("/api/files/open", methods=["POST"])
+    def api_files_open():
+        if not is_local(request.remote_addr):
+            return jsonify({"status": "error", "error": "Only on the computer running rBrowser"}), 403
+        data = request.get_json(silent=True) or {}
+        if data.get("folder"):
+            return jsonify(files.open_folder(data.get("kind")))
+        return jsonify(files.open(data.get("kind"), data.get("rel"), bool(data.get("show"))))
+
+    @app.route("/api/files/get")
+    def api_files_get():
+        # The file itself, to save it on the device the page is on (a phone).
+        path = files.resolve(request.args.get("kind"), request.args.get("rel"))
+        if not path:
+            return jsonify({"status": "error", "error": "No such file"}), 404
+        return send_file(path, mimetype="application/octet-stream", as_attachment=True,
+                         download_name=os.path.basename(path))
 
     @app.route("/api/download/cancel/<download_id>", methods=["POST"])
     def api_download_cancel(download_id):
@@ -1314,6 +1483,18 @@ def register_routes(app, browser) -> None:
         # the browser tab never had one.
         return send_from_directory("templates", "favicon.svg", mimetype="image/svg+xml")
 
+    @app.route("/logo.png")
+    @app.route("/logo-small.png")
+    @app.route("/logo-fade.png")
+    def logo():
+        # rBrowser's logo: logo.png (512 px) for the splash screen, the
+        # clients' empty pages and About, logo-small.png (128 px) where it is
+        # small, as in Settings and the browser tab. logo-fade.png is the
+        # same sphere with another glow, the splash fades into it.
+        # logo-256.png is the app's window icon.
+        name = request.path.lstrip("/")
+        return send_from_directory("templates", name, mimetype="image/png")
+
     @app.route("/api/fingerprint/<node_hash>", methods=["POST"])
     def api_send_fingerprint(node_hash):
         print(f"API Request: Sending identity fingerprint to {node_hash[:16]}...")
@@ -1346,28 +1527,33 @@ def register_routes(app, browser) -> None:
             why = status_data.get("reticulum_error") or "unknown error"
             return jsonify({"status": "connerror",
                             "message": "Reticulum failed: " + html_escape(why),
-                            "detail": why, "color": "red"})
+                            "short": "Reticulum failed", "detail": why, "color": "red"})
 
+        # "short": the words shown on a phone, where the bar is narrow.
         if connection_state == "initializing":
-            return jsonify({"status": "waiting", "message": "Starting Reticulum...", "color": "yellow"})
+            return jsonify({"status": "waiting", "message": "Starting Reticulum...", "short": "Starting...",
+                            "color": "yellow"})
 
         if connection_state == "connecting":
-            return jsonify({"status": "waiting", "message": "Connecting to Reticulum...", "color": "yellow"})
+            return jsonify({"status": "waiting", "message": "Connecting to Reticulum...", "short": "Connecting...",
+                            "color": "yellow"})
 
         if not reticulum_ready:
-            return jsonify({"status": "waiting", "message": "Reticulum not ready...", "color": "yellow"})
+            return jsonify({"status": "waiting", "message": "Reticulum not ready...", "short": "Not ready...",
+                            "color": "yellow"})
 
         # rbrowser/rnswatch.py: every interface to the network is down (no
         # coverage, no Wi-Fi) while Reticulum itself still answers.
         if status_data.get("rns_ifaces_total") and not status_data.get("rns_ifaces_online"):
             return jsonify({"status": "offline", "color": "red",
-                            "message": "Reticulum interface disconnected, reconnecting..."})
+                            "message": "Reticulum interface disconnected, reconnecting...",
+                            "short": "Offline. Reconnecting..."})
 
         # rbrowser/netwatch.py: Reticulum still says connected while the
         # line is dead, so this comes before its states.
         if status_data.get("internet") == "down":
             return jsonify({"status": "offline", "message": "No internet connection, waiting for reconnect...",
-                            "color": "red"})
+                            "short": "No internet...", "color": "red"})
 
         if connection_state == "connected":
             if app_uptime < 60:
@@ -1375,28 +1561,35 @@ def register_routes(app, browser) -> None:
                     {
                         "status": "waiting",
                         "message": "Connected! <span style='color: #FFC107;'>Waiting for announces...</span> ",
+                        "short": "Connected. <span style='color: #FFC107;'>Waiting...</span>",
                         "color": "green",
                     }
                 )
             if app_uptime < 120:
-                return jsonify({"status": "waiting", "message": "Waiting for network activity...", "color": "yellow"})
+                return jsonify({"status": "waiting", "message": "Waiting for network activity...",
+                                "short": "Waiting for activity...", "color": "yellow"})
             return jsonify(
-                {"status": "waiting", "message": "Connected but no network activity", "color": "yellow"}
+                {"status": "waiting", "message": "Connected but no network activity",
+                 "short": "Connected. No activity", "color": "yellow"}
             )
 
         if connection_state == "active":
             if has_nodes:
                 if time_since_last_announce and time_since_last_announce > 300:
                     return jsonify(
-                        {"status": "waiting", "message": "No recent announces, waiting...", "color": "yellow"}
+                        {"status": "waiting", "message": "No recent announces, waiting...",
+                         "short": "No recent announces", "color": "yellow"}
                     )
-                return jsonify({"status": "online", "message": "Online. Reticulum Connected!", "color": "green"})
+                return jsonify({"status": "online", "message": "Online. Reticulum Connected!",
+                                "short": "Online. Connected.", "color": "green"})
             return jsonify(
-                {"status": "waiting", "message": "Connection active but no nodes found", "color": "yellow"}
+                {"status": "waiting", "message": "Connection active but no nodes found",
+                 "short": "Active. No nodes", "color": "yellow"}
             )
 
         return jsonify(
-            {"status": "connerror", "message": f"Unknown connection state: {connection_state}", "color": "red"}
+            {"status": "connerror", "message": f"Unknown connection state: {connection_state}",
+             "short": "Unknown state", "color": "red"}
         )
 
     @app.route("/templates/go.png")
@@ -1624,7 +1817,7 @@ def register_routes(app, browser) -> None:
     def rrc_input(address):
         incoming = request.get_json(silent=True) or {}
         return jsonify(browser.rrc.input(address, incoming.get("room"), incoming.get("text", ""),
-                                         bool(incoming.get("split"))))
+                                         bool(incoming.get("split")), incoming.get("fmt")))
 
     @app.route("/api/rrc/join/<address>", methods=["POST"])
     def rrc_join(address):

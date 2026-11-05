@@ -7,7 +7,16 @@
  * Documentation for the Micron markdown format can be found here:
  * https://raw.githubusercontent.com/markqvist/NomadNet/refs/heads/master/nomadnet/ui/textui/Guide.py
  */
- 
+
+// DOMPurify drops field names like "name" or "title" (anti-clobbering): keep them.
+if (typeof DOMPurify !== 'undefined' && DOMPurify.addHook) {
+    DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
+        if (data.attrName === 'name' && (node.nodeName === 'INPUT' || node.nodeName === 'TEXTAREA')) {
+            data.forceKeepAttr = true;
+        }
+    });
+}
+
 class MicronParser {
 
     constructor(darkTheme = true, enableForceMonospace = true) {

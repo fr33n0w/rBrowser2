@@ -1,0 +1,5 @@
+# The app version: rBrowser in a window of its own (python rBrowser.py --app).
+# Optional, on top of requirements.txt; the installers ask whether you want it.
+# Linux also needs GTK with WebKit2 (python3-gi, gir1.2-webkit2-4.1), installed by install.sh.
+pywebview>=5.0
+pystray>=0.19

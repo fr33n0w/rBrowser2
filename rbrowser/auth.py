@@ -193,7 +193,10 @@ class Auth:
         """Settings > System Setup > Access password. With a password set, the
         current one is needed for any change (a session alone is not enough:
         a browser left open must not let someone lock the owner out)."""
-        if self.data["hash"] and not self.check_password(incoming.get("current"), address):
+        # "Ask on this computer too" alone does not: whoever got this far is
+        # already in, and it only decides whether localhost is asked.
+        only_local = set(incoming) <= {"ask_local", "current"}
+        if self.data["hash"] and not only_local and not self.check_password(incoming.get("current"), address):
             wait = self.locked(address)
             return {"status": "error", "error": f"Too many wrong passwords: wait {wait // 60 + 1} min" if wait
                     else "The current password is not right"}
@@ -243,7 +246,8 @@ class Auth:
 # except browsing and, if allowed, chatting.
 
 # Never, not even to read: the private keys.
-GUEST_NEVER = (re.compile(r"^/api/identities/(export-all|[^/]+/export)$"),)
+GUEST_NEVER = (re.compile(r"^/api/identities/(export-all|[^/]+/export)$"),
+               re.compile(r"^/api/files(/|$)"))
 
 # Writes a guest may always make: browsing NomadNet pages and files, the
 # node checks (ping, path, kind), the RMAP refresh (limited by the server).
@@ -277,6 +281,8 @@ READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 def guest_blocked(method: str, path: str, rights: Dict[str, bool]) -> Optional[str]:
     """Why a guest may not make this request, or None if it may."""
     if any(p.match(path) for p in GUEST_NEVER):
+        if path.startswith("/api/files"):
+            return "Guest mode: the files on this computer are not shown to guests"
         return "Guest mode: identity keys are not shown to guests"
     if (path == "/api/messenger" or path.startswith("/api/messenger/")) and not rights.get("messenger"):
         return "Guest mode: the messenger is not open to guests"

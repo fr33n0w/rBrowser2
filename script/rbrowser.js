@@ -8,6 +8,49 @@
  * or async, so execution order is unchanged.
  */
 
+// Windows has no flag emoji: load the Twemoji flags (MIT / CC-BY 4.0) only there.
+(function polyfillCountryFlags() {
+    const emojiFonts = '"Twemoji Mozilla","Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji",sans-serif';
+    const drawn = text => {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 1;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.textBaseline = 'top';
+        ctx.font = `100px ${emojiFonts}`;
+        ctx.scale(0.01, 0.01);
+        const pixel = colour => {
+            ctx.clearRect(0, 0, 100, 100);
+            ctx.fillStyle = colour;
+            ctx.fillText(text, 0, 0);
+            return ctx.getImageData(0, 0, 1, 1).data.join(',');
+        };
+        const white = pixel('#fff'), black = pixel('#000');
+        return white === black && !black.startsWith('0,0,0,');
+    };
+    try {
+        if (!drawn('\u{1F60A}') || drawn('\u{1F1EE}\u{1F1F9}')) return;
+    } catch (e) {
+        return;
+    }
+    const face = (family, style) => `@font-face {
+        font-family: "${family}";
+        font-style: ${style};
+        font-weight: 100 900;
+        unicode-range: U+1F1E6-1F1FF, U+1F3F4, U+E0062-E0063, U+E0065, U+E0067,
+            U+E006C, U+E006E, U+E0073-E0074, U+E0077, U+E007F;
+        src: url('/templates/fonts/TwemojiCountryFlags.woff2') format('woff2');
+        font-display: swap;
+    }`;
+    const style = document.createElement('style');
+    style.textContent = ['Twemoji Country Flags', 'Inter']
+        .flatMap(family => [face(family, 'normal'), face(family, 'italic')]).join('\n');
+    document.head.appendChild(style);
+    // Cascadia Mono has its own flag letters: put the flags in front of it.
+    const root = document.documentElement;
+    const mono = getComputedStyle(root).getPropertyValue('--mono-font').trim();
+    if (mono) root.style.setProperty('--mono-font', `"Twemoji Country Flags", ${mono}`);
+})();
+
 // Access password (Settings > System Setup): a call answered 401 means the
 // session is gone (password changed, or switched on from another browser):
 // back to the login page, once.
@@ -2954,6 +2997,22 @@ async function takePageScreenshot(tab, content) {
 
         const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
         if (!blob) throw new Error('the page is too large to draw');
+        const small = scale < 1 ? '<br>Long page: drawn at a smaller scale to fit.' : '';
+        // "Ask where to save" off (Settings > File Downloads): into the download
+        // folder, like a NomadNet file. A phone always saves on itself.
+        const touch = window.matchMedia('(pointer: coarse)').matches;
+        if (!touch && typeof filesAsk !== 'undefined' && !filesAsk) {
+            const res = await fetch(`/api/files/screenshot?name=${encodeURIComponent(screenshotFileName(tab))}`,
+                                    { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: blob })
+                .then(r => r.json()).catch(() => null);
+            if (res && res.status === 'success') {
+                if (working && working.remove) working.remove();
+                if (filesLocal && window.rbSavedFileRow) window.rbSavedFileRow(res.name);
+                showNotification(`Screenshot saved in the download folder: <strong>${escapeHtml(res.name)}</strong>` + small,
+                                 'success', 4000);
+                return;
+            }
+        }
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
         link.download = screenshotFileName(tab);
@@ -2962,9 +3021,7 @@ async function takePageScreenshot(tab, content) {
         link.remove();
         setTimeout(() => URL.revokeObjectURL(link.href), 10000);
         if (working && working.remove) working.remove();
-        showNotification(`Screenshot saved: <strong>${escapeHtml(link.download)}</strong>`
-                         + (scale < 1 ? '<br>Long page: drawn at a smaller scale to fit.' : ''),
-                         'success', 4000);
+        showNotification(`Screenshot saved: <strong>${escapeHtml(link.download)}</strong>` + small, 'success', 4000);
     } catch (error) {
         if (working && working.remove) working.remove();
         showNotification(`Screenshot failed: ${escapeHtml(error.message || String(error))}`, 'error', 6000);
@@ -2994,18 +3051,22 @@ function screenshotFileName(tab) {
 // with the text typed in the field instead.
 // ─────────────────────────────────────────────────────────────
 
-function showChoiceDialog({ title, html = '', buttons, input = null }) {
+function showChoiceDialog({ title, html = '', buttons, input = null, inputs = null }) {
     return new Promise(resolve => {
         const overlay = document.createElement('div');
         overlay.className = 'auto-reload-modal choice-modal';
         const dialog = document.createElement('div');
         dialog.className = 'auto-reload-dialog choice-dialog';
+        // inputs (several fields): resolves with the array of what was typed.
+        const fields = inputs || (input ? [input] : []);
         dialog.innerHTML = `
             <h3>${title}</h3>
             <div class="choice-body">${html}</div>
-            ${input ? `<input name="choice-input" aria-label="${escapeHtml(input.placeholder || 'Text')}" class="choice-input" type="text" maxlength="40"
-                              value="${escapeHtml(input.value || '')}"
-                              placeholder="${escapeHtml(input.placeholder || '')}">` : ''}
+            ${fields.map((f, i) => `<input name="choice-input-${i}" aria-label="${escapeHtml(f.placeholder || 'Text')}" class="choice-input"
+                              type="${f.type === 'password' ? 'password' : 'text'}" maxlength="${f.maxlength || 40}" autocomplete="off"
+                              ${i < fields.length - 1 ? 'style="margin-bottom:8px"' : ''}
+                              value="${escapeHtml(f.value || '')}"
+                              placeholder="${escapeHtml(f.placeholder || '')}">`).join('')}
             <div class="auto-reload-actions"></div>`;
 
         const field = dialog.querySelector('.choice-input');
@@ -3030,8 +3091,10 @@ function showChoiceDialog({ title, html = '', buttons, input = null }) {
             btn.className = b.primary ? 'btn-save' : (b.danger ? 'btn-cancel choice-danger' : 'btn-cancel');
             btn.onclick = () => {
                 if (b.takesInput) {
-                    const text = field ? field.value.trim() : '';
-                    finish(text);
+                    // A password is taken as typed, spaces included.
+                    const typed = [...dialog.querySelectorAll('.choice-input')]
+                        .map((el, i) => fields[i].type === 'password' ? el.value : el.value.trim());
+                    finish(inputs ? typed : (typed[0] || ''));
                 } else {
                     finish(b.value === undefined ? null : b.value);
                 }
@@ -5016,7 +5079,7 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
                     if (wasInErrorState) {
                     }
 
-                    updateConnectionStatus(data.status, data.message, data.color);
+                    updateConnectionStatus(data.status, data.message, data.color, data.short);
                 })
                 .catch(error => {
                     statusFetchFailures++;
@@ -5025,12 +5088,12 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
                     console.warn(`Connection status fetch failed (${statusFetchFailures}/${maxStatusFailures}):`, error);
                     
                     if (statusFetchFailures >= maxStatusFailures) {
-                        updateConnectionStatus('connerror', 'Error! Python script stopped?', 'red');
+                        updateConnectionStatus('connerror', 'Error! Python script stopped?', 'red', 'rBrowser stopped?');
                     } else {
                         if (statusFetchFailures === 1) {
-                            updateConnectionStatus('waiting', 'Checking connection...', 'yellow');
+                            updateConnectionStatus('waiting', 'Checking connection...', 'yellow', 'Checking...');
                         } else if (statusFetchFailures === 2) {
-                            updateConnectionStatus('waiting', 'Retrying connection check...', 'yellow');
+                            updateConnectionStatus('waiting', 'Retrying connection check...', 'yellow', 'Retrying...');
                         }
                     }
                 });
@@ -5049,7 +5112,8 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
             lastNetStatus = status;
         }
 
-        function updateConnectionStatus(status, message, color) {
+        // short: the same state in fewer words, shown on a phone (.sb-short).
+        function updateConnectionStatus(status, message, color, short) {
             noteInternetChange(status, message);
             const state = { green: 'connected', yellow: 'connecting', red: 'failed' }[color] || 'closed';
             if (state !== nomadNetState) {
@@ -5060,11 +5124,11 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
             if (statusElement) {
                 statusElement.className = `status-indicator ${status}`;
                 // A dot in the colour of the state, then the words.
-                statusElement.innerHTML = `<span class="sb-dot" style="background: ${getStatusColor(color)}; box-shadow: 0 0 6px ${getStatusColor(color)}99;"></span><span class="sb-text">${message}</span>`;
+                statusElement.innerHTML = `<span class="sb-dot" style="background: ${getStatusColor(color)}; box-shadow: 0 0 6px ${getStatusColor(color)}99;"></span><span class="sb-text"><span class="sb-long">${message}</span><span class="sb-short">${short || message}</span></span>`;
                 // The bar is one line; a Reticulum error can be longer than
                 // that. Hovering the bar shows the whole of it.
                 const bar = statusElement.closest('.status-bar');
-                if (bar) bar.title = statusElement.textContent.trim();
+                if (bar) bar.title = statusElement.querySelector('.sb-long').textContent.trim();
             }
         }
 
@@ -5145,206 +5209,414 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
         return pathPart.split('/').filter(Boolean).pop() || 'file';
     }
 
+    // Downloads: one panel at the bottom right, a row per file. One transfer
+    // at a time per node (they would share its link and slow each other
+    // down), files from different nodes at the same time; the others wait
+    // in line and start by themselves.
+    // The panel can be reduced with – to one small line with the overall
+    // progress; a click on it opens it again. The transfers go on either way.
+    const downloadQueues = new Map();   // node hash -> starts waiting their turn
+    const downloadBusy = new Set();     // node hashes with a transfer running
+    let downloadsMinimized = false;
+
+    function downloadList() {
+        let list = document.querySelector('.download-list');
+        if (!list) {
+            list = document.createElement('div');
+            list.className = 'download-list';
+            list.classList.toggle('dl-minimized', downloadsMinimized);
+            list.innerHTML = `
+                <div class="dl-panel-head" title="Open the downloads">
+                    <span class="dl-panel-title">Downloads</span>
+                    <button class="dl-min" title="Minimize">–</button>
+                    <button class="dl-cancel-all" title="Cancel all downloads (the ones running and the ones waiting)">×</button>
+                </div>
+                <div class="dl-rows"></div>`;
+            const toggle = (minimized) => {
+                downloadsMinimized = minimized;
+                list.classList.toggle('dl-minimized', minimized);
+                updateDownloadSummary();
+            };
+            list.querySelector('.dl-min').addEventListener('click', (e) => { e.stopPropagation(); toggle(true); });
+            // Every row's own x: the waiting ones first, so closing a running
+            // one does not start the next in line.
+            list.querySelector('.dl-cancel-all').addEventListener('click', (e) => {
+                e.stopPropagation();
+                const rows = [...list.querySelectorAll('.download-box')];
+                rows.sort((a, b) => (b.dataset.state === 'waiting') - (a.dataset.state === 'waiting'));
+                rows.forEach(row => row.querySelector('.dl-close').click());
+            });
+            list.querySelector('.dl-panel-head').addEventListener('click', () => { if (downloadsMinimized) toggle(false); });
+            document.body.appendChild(list);
+        }
+        return list;
+    }
+
+    // Saved straight into the download folder: the row becomes a small button
+    // that opens the file, shows it in its folder or goes away.
+    function savedFileChip(row, name) {
+        const open = show => fetch('/api/files/open', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kind: 'nomadnet', rel: name, show }),
+        }).then(r => r.json()).then(res => {
+            if (res.status !== 'success') throw new Error(res.error || 'error');
+        }).catch(e => showNotification(escapeHtml(e.message), 'error', 6000));
+        row.className = 'download-box dl-saved';
+        row.dataset.state = 'done';
+        row.innerHTML = `
+            <button class="dl-saved-open" title="Open ${escapeHtml(name)}">📄 <span>${escapeHtml(name)}</span></button>
+            <button class="dl-saved-folder" title="Show it in the download folder">📁</button>
+            <button class="dl-saved-close" title="Close">×</button>`;
+        row.querySelector('.dl-saved-open').addEventListener('click', () => open(false));
+        row.querySelector('.dl-saved-folder').addEventListener('click', () => open(true));
+        row.querySelector('.dl-saved-close').addEventListener('click', () => removeDownloadRow(row));
+        updateDownloadSummary();
+    }
+
+    // The same button for a file saved from elsewhere (a page screenshot).
+    window.rbSavedFileRow = name => {
+        const row = document.createElement('div');
+        downloadList().querySelector('.dl-rows').appendChild(row);
+        savedFileChip(row, name);
+    };
+
+    function removeDownloadRow(row) {
+        const list = row.closest('.download-list');
+        if (row.parentNode) row.parentNode.removeChild(row);
+        if (list && !list.querySelector('.download-box') && list.parentNode) list.parentNode.removeChild(list);
+        else updateDownloadSummary();
+    }
+
+    // The head: "Downloads (3)" when open; reduced, how many are still
+    // running and their overall progress.
+    function updateDownloadSummary() {
+        const list = document.querySelector('.download-list');
+        if (!list) return;
+        const rows = [...list.querySelectorAll('.download-box')];
+        const running = rows.filter(r => r.dataset.state === 'active' || r.dataset.state === 'waiting');
+        list.classList.toggle('dl-only-saved', rows.length > 0 && rows.every(r => r.classList.contains('dl-saved')));
+        const title = list.querySelector('.dl-panel-title');
+        if (!downloadsMinimized) {
+            title.textContent = `Downloads (${rows.length})`;
+        } else if (running.length) {
+            const pct = running.reduce((sum, r) => sum + Number(r.dataset.progress || 0), 0) / running.length;
+            title.textContent = `⬇ ${running.length} download${running.length === 1 ? '' : 's'} · ${pct.toFixed(0)}%`;
+        } else {
+            title.textContent = `✅ ${rows.length} download${rows.length === 1 ? '' : 's'} finished`;
+        }
+    }
+
+    // Which node a file comes from: its name as the node list or the
+    // favorites know it, else its hash. Taken once, when the row is made,
+    // and kept in that row only.
+    function downloadNodeLabel(nodeHash) {
+        const hash = String(nodeHash).toLowerCase();
+        let name = '';
+        const item = /^[0-9a-f]+$/.test(hash) && document.querySelector(`.node-item[data-hash="${hash}"]`);
+        if (item) name = item.getAttribute('data-name') || '';
+        if (!name && typeof knownNodeName === 'function') name = knownNodeName(hash) || '';
+        return name || hash;
+    }
+
+    function setDownloadRow(row, state, progress) {
+        row.dataset.state = state;
+        if (progress !== undefined) row.dataset.progress = String(progress);
+        updateDownloadSummary();
+    }
+
+    function downloadSlotFree(nodeHash) {
+        downloadBusy.delete(nodeHash);
+        const queue = downloadQueues.get(nodeHash) || [];
+        const next = queue.shift();
+        if (!queue.length) downloadQueues.delete(nodeHash);
+        if (next) next();
+    }
+
+    function formatDuration(seconds) {
+        seconds = Math.max(1, Math.round(seconds));
+        if (seconds < 60) return `${seconds} s`;
+        const minutes = Math.round(seconds / 60);
+        if (minutes < 60) return `${minutes} min`;
+        return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+    }
+
+    // How fast and how long: the bytes received over the last 10 seconds,
+    // so a pause or a burst does not swing the numbers.
+    function downloadStats(samples, progress, size) {
+        const pct = `${progress.toFixed(0)}%`;
+        if (!size) return `Downloading from network... ${pct}`;
+        const received = size * progress / 100;
+        const now = Date.now();
+        samples.push({ t: now, bytes: received });
+        while (samples.length > 2 && now - samples[0].t > 10000) samples.shift();
+        const parts = [pct, `${formatFileSize(received)} of ${formatFileSize(size)}`];
+        const first = samples[0];
+        const seconds = (now - first.t) / 1000;
+        if (seconds >= 1.5) {
+            const speed = (received - first.bytes) / seconds;
+            if (speed > 0) {
+                parts.push(`${formatFileSize(speed)}/s`);
+                parts.push(`${formatDuration((size - received) / speed)} left`);
+            } else {
+                parts.push('waiting for data...');
+            }
+        }
+        return parts.join(' · ');
+    }
+
     function handleFileDownload(nodeHash, filePath) {
         const startUrl = `/api/download/${nodeHash}/start?path=${encodeURIComponent(filePath)}`;
         const filename = displayFileName(filePath);
         const touchDevice = window.matchMedia('(pointer: coarse)').matches
             || (typeof isMobileDevice === 'function' && isMobileDevice());
 
-        // Sized by the stylesheet (.download-box): the old fixed 320px width
-        // 60px from the edge ran off the side of a phone screen.
         const notification = document.createElement('div');
         notification.className = 'download-box';
-        
         notification.innerHTML = `
-            <div style="display:flex; align-items:flex-start; gap:10px;">
-                <div class="dl-title" style="flex:1;">📁 Downloading ${escapeHtml(filename)}...</div>
-                <button class="dl-close" title="Close"
-                        style="background:none; border:none; color:#7d8590; cursor:pointer;
-                               font-size:18px; line-height:1; padding:0 2px;">×</button>
+            <div class="dl-head">
+                <div class="dl-title">📁 ${escapeHtml(filename)}</div>
+                <button class="dl-close" title="Cancel / close">×</button>
             </div>
-            <div style="margin: 8px 0; background: #333; height: 6px; border-radius: 3px; overflow: hidden;">
-                <div class="dl-bar" style="background: #58a6ff; height: 100%; width: 0%; transition: width 0.3s;"></div>
-            </div>
-            <div class="dl-text" style="font-size: 12px; color: #7d8590;">Connecting to node...</div>
+            <div class="dl-from" title="${escapeHtml(String(nodeHash))}">From: ${escapeHtml(downloadNodeLabel(nodeHash))}</div>
+            <div class="dl-track"><div class="dl-bar"></div></div>
+            <div class="dl-text">Connecting to node...</div>
         `;
+        downloadList().querySelector('.dl-rows').appendChild(notification);
+        setDownloadRow(notification, 'waiting', 0);
 
-        document.body.appendChild(notification);
-
-        // Scoped to this notification. These used to be looked up by id, so
-        // two concurrent downloads both drove the first one's progress bar.
+        // Scoped to this row: two downloads must not drive each other's bar.
         const progressBar = notification.querySelector('.dl-bar');
         const progressText = notification.querySelector('.dl-text');
         const titleEl = notification.querySelector('.dl-title');
 
         let pollInterval = null;
         let closed = false;
+        let downloadId = null;
+        let saved = false;
+        let started = false;
+        let released = false;
+        const samples = [];
+
+        // This node's turn ends (done, failed or cancelled): the next file
+        // waiting for it starts.
+        const release = () => {
+            if (!started || released) return;
+            released = true;
+            downloadSlotFree(nodeHash);
+        };
 
         // One way out, used by every ending - success, refusal, network
-        // error, or the user closing it. Before this, only the success path
-        // ever removed the box: a failed download left it on screen forever
-        // with no way to dismiss it, and its poll timer still running.
+        // error, or the user closing it - so no row stays on screen forever
+        // with its poll timer still running.
         const finish = (autoCloseMs) => {
             if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+            release();
             if (autoCloseMs === null) return;
             setTimeout(() => {
-                if (!closed && notification.parentNode) {
+                if (!closed) {
                     closed = true;
-                    notification.parentNode.removeChild(notification);
+                    removeDownloadRow(notification);
                 }
             }, autoCloseMs);
         };
 
-        // Closing the box is the cancel button: it stops the transfer on the
-        // server too. It used to only hide the box while the file kept coming
-        // over the mesh. Not once the file is saved - on a phone the browser
-        // may still be reading the server's copy.
-        let downloadId = null;
-        let saved = false;
+        // Closing the row is the cancel button: it stops the transfer on the
+        // server too, or takes the file out of the line. Not once the file is
+        // saved - on a phone the browser may still be reading the server's copy.
         const cancelOnServer = () => {
             if (!downloadId || saved) return;
             fetch(`/api/download/cancel/${downloadId}`, { method: 'POST' }).catch(() => {});
         };
-
-        notification.querySelector('.dl-close').addEventListener('click', () => {
-            closed = true;
-            if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-            cancelOnServer();
-            if (notification.parentNode) notification.parentNode.removeChild(notification);
-        });
 
         const fail = (title, detail) => {
             progressBar.style.background = '#ff7b72';
             progressBar.style.width = '100%';
             titleEl.innerHTML = `❌ ${escapeHtml(title)}`;
             progressText.textContent = detail || '';
+            setDownloadRow(notification, 'error');
             finish(8000);
         };
 
-        // Start the download
-        fetch(startUrl)
-            .then(r => r.json())
-            .then(data => {
-                if (data.error) {
-                    throw new Error(data.error);
-                }
-                
-                downloadId = data.download_id;
-                // Closed while the request to start was still on its way.
-                if (closed) { cancelOnServer(); return; }
-                let pollFailures = 0;
+        const start = () => {
+            if (closed) return;
+            started = true;
+            setDownloadRow(notification, 'active', 0);
+            downloadBusy.add(nodeHash);
+            progressText.textContent = 'Connecting to node...';
+            fetch(startUrl)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
 
-                // Half a second, not a tenth. The old interval put ten HTTP
-                // requests a second on the server for the whole transfer -
-                // which over LoRa can be minutes - to move a progress bar
-                // nobody can read that fast.
-                pollInterval = setInterval(() => {
-                    if (closed) { finish(null); return; }
+                    downloadId = data.download_id;
+                    // Closed while the request to start was still on its way.
+                    if (closed) { cancelOnServer(); return; }
+                    let pollFailures = 0;
 
-                    fetch(`/api/download/progress/${downloadId}`)
-                        .then(r => r.json())
-                        .then(progressData => {
-                            pollFailures = 0;
-                            const progress = progressData.progress || 0;
-                            const status = progressData.status;
+                    // Half a second, not a tenth: the transfer can take minutes
+                    // over LoRa, and the bar needs no more than that.
+                    pollInterval = setInterval(() => {
+                        if (closed) { finish(null); return; }
 
-                            progressBar.style.width = progress + '%';
+                        fetch(`/api/download/progress/${downloadId}`)
+                            .then(r => r.json())
+                            .then(progressData => {
+                                pollFailures = 0;
+                                const progress = progressData.progress || 0;
+                                const status = progressData.status;
 
-                            if (status === 'starting') {
-                                progressText.textContent = 'Connecting to node...';
-                            } else if (status === 'downloading') {
-                                progressText.textContent = `Downloading from network... ${progress.toFixed(1)}%`;
-                            } else if (status === 'complete') {
-                                clearInterval(pollInterval);
-                                pollInterval = null;
-                                progressText.textContent = 'Saving file...';
+                                progressBar.style.width = progress + '%';
+                                if (status !== 'error') setDownloadRow(notification, 'active', progress);
 
-                                let savedName = filename;
-                                fetch(`/api/download/result/${downloadId}`)
-                                    .then(r => {
-                                        if (!r.ok) {
-                                            return r.json()
-                                                .then(j => { throw new Error(j.error || 'Download failed'); },
-                                                      () => { throw new Error(`Download failed (HTTP ${r.status})`); });
-                                        }
-                                        // The name the serving node reported,
-                                        // which can differ from the one in the
-                                        // URL when the node converted the file.
-                                        // Percent-encoded by the server (a
-                                        // header must be latin-1).
-                                        const reported = r.headers.get('X-Download-Filename');
-                                        try {
-                                            savedName = reported ? decodeURIComponent(reported) : filename;
-                                        } catch (e) {
-                                            savedName = reported || filename;
-                                        }
-                                        return r.blob();
-                                    })
-                                    .then(blob => {
+                                if (status === 'starting') {
+                                    progressText.textContent = 'Connecting to node...';
+                                } else if (status === 'downloading') {
+                                    progressText.textContent = downloadStats(samples, progress, progressData.size);
+                                } else if (status === 'complete') {
+                                    clearInterval(pollInterval);
+                                    pollInterval = null;
+                                    release();
+                                    progressText.textContent = 'Saving file...';
+
+                                    // "Ask where to save" off (Settings > File
+                                    // Downloads): the server puts it straight in
+                                    // the download folder. Refused (a guest), the
+                                    // usual save below.
+                                    // A phone always saves on itself: the folder
+                                    // is on the computer running rBrowser.
+                                    const ask = touchDevice || typeof filesAsk === 'undefined' || filesAsk;
+                                    const kept = ask ? Promise.resolve(null)
+                                        : fetch(`/api/download/keep/${downloadId}`, { method: 'POST' })
+                                            .then(r => r.json()).then(res => res.status === 'success' ? res : null)
+                                            .catch(() => null);
+                                    kept.then(res => {
+                                    if (res) {
                                         saved = true;
+                                        setDownloadRow(notification, 'done', 100);
+                                        if (filesLocal) {
+                                            savedFileChip(notification, res.name);
+                                            finish(null);
+                                            return;
+                                        }
                                         progressBar.style.background = '#7c3aed';
-                                        progressText.textContent =
-                                            `Download completed (${formatFileSize(blob.size)})`;
-                                        titleEl.innerHTML = `✅ Downloaded ${escapeHtml(savedName)}`;
+                                        progressBar.style.width = '100%';
+                                        titleEl.innerHTML = `✅ Downloaded ${escapeHtml(res.name)}`;
+                                        progressText.textContent = 'Saved in the download folder';
+                                        progressText.title = res.folder || '';
+                                        finish(6000);
+                                        return;
+                                    }
+                                    let savedName = filename;
+                                    fetch(`/api/download/result/${downloadId}`)
+                                        .then(r => {
+                                            if (!r.ok) {
+                                                return r.json()
+                                                    .then(j => { throw new Error(j.error || 'Download failed'); },
+                                                          () => { throw new Error(`Download failed (HTTP ${r.status})`); });
+                                            }
+                                            // The name the serving node reported,
+                                            // which can differ from the one in the
+                                            // URL when the node converted the file.
+                                            // Percent-encoded by the server (a
+                                            // header must be latin-1).
+                                            const reported = r.headers.get('X-Download-Filename');
+                                            try {
+                                                savedName = reported ? decodeURIComponent(reported) : filename;
+                                            } catch (e) {
+                                                savedName = reported || filename;
+                                            }
+                                            return r.blob();
+                                        })
+                                        .then(blob => {
+                                            saved = true;
+                                            setDownloadRow(notification, 'done', 100);
+                                            progressBar.style.background = '#7c3aed';
+                                            progressBar.style.width = '100%';
+                                            progressText.textContent =
+                                                `Download completed (${formatFileSize(blob.size)})`;
+                                            titleEl.innerHTML = `✅ Downloaded ${escapeHtml(savedName)}`;
 
-                                        // Attached to the page, and the blob URL
-                                        // kept for a minute. Android Chrome starts
-                                        // the save asynchronously: revoking the URL
-                                        // straight after click() left it nothing to
-                                        // read, so on phones the bar finished and
-                                        // the save then failed.
-                                        // On a phone not even that was enough:
-                                        // Android's downloader would not save
-                                        // the blob. There the browser is pointed
-                                        // at the server's copy instead, which it
-                                        // saves like any other download (the
-                                        // server keeps it for a few minutes and
-                                        // names it in Content-Disposition).
-                                        const url = touchDevice
-                                            ? `/api/download/result/${downloadId}`
-                                            : window.URL.createObjectURL(blob);
-                                        const link = document.createElement('a');
-                                        link.href = url;
-                                        link.download = savedName;
-                                        link.style.display = 'none';
-                                        document.body.appendChild(link);
-                                        link.click();
-                                        setTimeout(() => {
-                                            link.remove();
-                                            if (!touchDevice) window.URL.revokeObjectURL(url);
-                                        }, 60000);
+                                            // Attached to the page, and the blob URL
+                                            // kept for a minute: Android Chrome starts
+                                            // the save asynchronously and found nothing
+                                            // to read when it was revoked at once.
+                                            // On a phone the browser is pointed at the
+                                            // server's copy instead, which Android's
+                                            // downloader saves like any other download
+                                            // (kept a few minutes, named in
+                                            // Content-Disposition).
+                                            const url = touchDevice
+                                                ? `/api/download/result/${downloadId}`
+                                                : window.URL.createObjectURL(blob);
+                                            const link = document.createElement('a');
+                                            link.href = url;
+                                            link.download = savedName;
+                                            link.style.display = 'none';
+                                            document.body.appendChild(link);
+                                            link.click();
+                                            setTimeout(() => {
+                                                link.remove();
+                                                if (!touchDevice) window.URL.revokeObjectURL(url);
+                                            }, 60000);
 
-                                        finish(4000);
-                                    })
-                                    .catch(err => {
-                                        console.error(err);
-                                        fail(`Could not save ${filename}`, err.message);
+                                            finish(4000);
+                                        })
+                                        .catch(err => {
+                                            console.error(err);
+                                            fail(`Could not save ${filename}`, err.message);
+                                        });
                                     });
-                            } else if (status === 'error') {
-                                clearInterval(pollInterval);
-                                pollInterval = null;
-                                fail(`Download of ${filename} failed`,
-                                     progressData.error || 'The node did not deliver the file');
-                            }
-                        })
-                        .catch(err => {
-                            console.error('Progress poll error:', err);
-                            // A few dropped polls are nothing; a server that
-                            // has stopped answering must not leave the box
-                            // spinning forever.
-                            if (++pollFailures >= 10) {
-                                clearInterval(pollInterval);
-                                pollInterval = null;
-                                fail(`Lost contact while downloading ${filename}`,
-                                     'The local server stopped responding');
-                            }
-                        });
-                }, 500);
-            })
-            .catch(err => {
-                console.error(err);
-                fail(`Could not start download of ${filename}`, err.message);
-            });
+                                } else if (status === 'error') {
+                                    clearInterval(pollInterval);
+                                    pollInterval = null;
+                                    fail(`Download of ${filename} failed`,
+                                         progressData.error || 'The node did not deliver the file');
+                                }
+                            })
+                            .catch(err => {
+                                console.error('Progress poll error:', err);
+                                // A few dropped polls are nothing; a server that
+                                // has stopped answering must not leave the row
+                                // spinning forever.
+                                if (++pollFailures >= 10) {
+                                    clearInterval(pollInterval);
+                                    pollInterval = null;
+                                    fail(`Lost contact while downloading ${filename}`,
+                                         'The local server stopped responding');
+                                }
+                            });
+                    }, 500);
+                })
+                .catch(err => {
+                    console.error(err);
+                    fail(`Could not start download of ${filename}`, err.message);
+                });
+        };
+
+        notification.querySelector('.dl-close').addEventListener('click', () => {
+            closed = true;
+            if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+            cancelOnServer();
+            if (!started) {
+                // Still in line: out of it.
+                const queue = downloadQueues.get(nodeHash) || [];
+                const i = queue.indexOf(start);
+                if (i >= 0) queue.splice(i, 1);
+            }
+            release();
+            removeDownloadRow(notification);
+        });
+
+        if (downloadBusy.has(nodeHash)) {
+            const queue = downloadQueues.get(nodeHash) || [];
+            queue.push(start);
+            downloadQueues.set(nodeHash, queue);
+            progressText.textContent = 'Waiting: another file from this node is downloading';
+        } else {
+            start();
+        }
     }
 
     function formatFileSize(bytes) {
@@ -6911,6 +7183,35 @@ function applySidebarState(collapsed) {
     });
 }
 
+// rBrowser as an app (--app, rbrowser/appwindow.py): in its window the page
+// has window.pywebview. There window.open() handed the system about:blank,
+// and the system asked what program should open it; so it asks the app
+// instead: this rBrowser's pages open as windows of the app, one per name
+// (brought forward when already open, not reloaded), anything else in the
+// web browser. What comes back stands in for the window: a location to set,
+// focus(). In a web browser nothing changes.
+const nativeWindowOpen = window.open.bind(window);
+function appWindowOpen(url, name) {
+    const api = window.pywebview.api;
+    if (name === '_self' && url) { location.href = url; return window; }
+    if (!name || name.startsWith('_')) name = '';   // _blank: a new window every time
+    let href = url ? new URL(url, location.href).href : 'about:blank';
+    if (url) api.open_window(href, name || '');
+    return {
+        closed: false,
+        location: {
+            get href() { return href; },
+            set href(value) { href = new URL(value, location.href).href; api.open_window(href, name || ''); },
+        },
+        focus() { if (name) api.focus_window(name); },
+        close() {},
+    };
+}
+window.open = function (url, name, features) {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.open_window) return appWindowOpen(url, name);
+    return nativeWindowOpen(url, name, features);
+};
+
 // A client in its own window (Settings > each client > Open in a new window,
 // off by default, remembered in this browser): its tab opens /?app=<kind>, a
 // page with that client alone, kept open while rBrowser does other things.
@@ -6918,7 +7219,8 @@ function applySidebarState(collapsed) {
 const APP_WINDOW_OPEN = { lxmf: () => openMessenger(), rrc: () => openRrc(), bbs: () => openRetibbs(), rmap: () => openRmap() };
 const APP_WINDOW_CLOSE = { lxmf: () => closeMessenger(), rrc: () => closeRrc(), bbs: () => closeRetibbs(), rmap: () => closeRmap() };
 const APP_WINDOW_TABS = { lxmf: 'messenger-tab', rrc: 'rrc-tab', bbs: 'retibbs-tab', rmap: 'rmap-tab' };
-const APP_WINDOW_NAMES = { lxmf: 'LXMF Messenger', rrc: 'RRC Client', bbs: 'BBS Client', rmap: 'RMAP' };
+// Also the windows' titles, as appwindow.py window_title (CLIENT_TITLES).
+const APP_WINDOW_NAMES = { lxmf: 'LXMF Client', rrc: 'RRC Client', bbs: 'BBS Client', rmap: 'RMAP Client' };
 const APP_WINDOW = (() => {
     const kind = new URLSearchParams(location.search).get('app');
     return kind && kind in APP_WINDOW_OPEN ? kind : '';
@@ -6972,6 +7274,12 @@ function openAppTab(kind) {
 
 // The main page answers to its name, so a client's window can bring it back.
 if (!APP_WINDOW) window.name = 'rbrowser-main';
+
+// rBrowser's logo (templates/logo.png): the clients' empty pages; small
+// (logo-small.png, 128 px): Settings, About.
+function rbLogo(extraClass = '', small = false) {
+    return `<img class="rb-logo${extraClass ? ' ' + extraClass : ''}" src="/logo${small ? '-small' : ''}.png" alt="" aria-hidden="true">`;
+}
 
 // In a client's own window, in place of the node list button: back to
 // rBrowser, forward if open, opened again if it was closed.
@@ -7192,7 +7500,7 @@ function appWindowClose() {
 if (APP_WINDOW) {
     document.addEventListener('DOMContentLoaded', () => {
         document.body.classList.add('app-window');
-        document.title = `${APP_WINDOW_NAMES[APP_WINDOW]} - rBrowser`;
+        document.title = `rBrowser2 - ${APP_WINDOW_NAMES[APP_WINDOW]}`;
         // The page's own start opens a blank page tab over it: opened again
         // until it stays open for 2 s.
         const started = Date.now();
@@ -8041,7 +8349,7 @@ function chooseMicronFont() {
 
     const family = chosen || 'monospace';
     document.documentElement.style.setProperty(
-        '--micron-font', chosen ? `"${chosen}", monospace` : 'monospace');
+        '--micron-font', chosen ? `"Twemoji Country Flags", "${chosen}", monospace` : '"Twemoji Country Flags", monospace');
 
     const measured = measureCellRatio(family);
     MICRON_CELL_RATIO = measured === null
@@ -8932,6 +9240,7 @@ const SETTINGS_CATEGORIES = [
     ['system', 'System Setup', '<rect x="2" y="2.5" width="12" height="4" rx="1"/><rect x="2" y="9.5" width="12" height="4" rx="1"/><path d="M4.5 4.5h.01M4.5 11.5h.01"/>'],
     ['identity', 'Identity', '<circle cx="8" cy="5.5" r="2.8"/><path d="M2.5 14c.6-3 2.8-4.5 5.5-4.5s4.9 1.5 5.5 4.5"/>'],
     ['nomadnet', 'NomadNet Browser', '<path d="M5.5 4h8M5.5 8h8M5.5 12h8"/><circle cx="2.5" cy="4" r=".8"/><circle cx="2.5" cy="8" r=".8"/><circle cx="2.5" cy="12" r=".8"/>'],
+    ['files', 'File Downloads', '<path d="M8 2.5v8M4.5 7.5L8 11l3.5-3.5"/><path d="M2.5 11.5v2h11v-2"/>'],
     ['messenger', 'LXMF Messenger', '<path d="M2 3h12v8H7l-3.5 2.5V11H2z"/>'],
     ['rrc', 'RRC Client', '<path d="M5.5 2.5l-1.5 11M11 2.5l-1.5 11M2.5 6h11M2 10.5h11"/>'],
     ['retibbs', 'BBS Client', '<rect x="2" y="2.5" width="12" height="9" rx="1"/><path d="M5 14h6M4.5 5.5h4M4.5 8h6"/>'],
@@ -9035,8 +9344,16 @@ function syncSettingsNav() {
     else filterSettings();
 }
 
-// Settings > System Setup > Access password: its own Apply, at once (not Save):
-// a change asks for the current password and must not wait for the dialog.
+// A refused change, in red on the setting's state line (until it is loaded again).
+function settingsLineError(id, text) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = '#f85149';
+}
+
+// Settings > System Setup > Access password: applied at once (not Save), each
+// change asking for the current password in a popup.
 async function loadAuthSettings() {
     let st;
     try { st = await fetch('/api/auth').then(r => r.json()); } catch (e) { return; }
@@ -9044,34 +9361,125 @@ async function loadAuthSettings() {
     const set = (id, on) => { const el = document.getElementById(id); if (el) el.classList.toggle('active', !!on); };
     set('setting-auth-on', st.enabled);
     set('setting-auth-local', st.ask_local);
-    const cur = document.getElementById('setting-auth-current-row');
-    if (cur) cur.hidden = !st.has_password;
     const state = document.getElementById('setting-auth-state');
+    if (state) state.style.color = '';
     if (state) state.textContent = !st.has_password ? 'No password set yet.'
         : st.enabled ? (st.local && !st.ask_local ? 'On: other devices are asked (this computer is not).' : 'On.')
         : 'A password is set, but not asked.';
     const out = document.getElementById('setting-auth-logout');
     if (out) out.onclick = () => { location.href = '/logout'; };
-    const apply = document.getElementById('setting-auth-apply');
-    if (apply) apply.onclick = async () => {
-        const on = id => document.getElementById(id).classList.contains('active');
-        const body = { enabled: on('setting-auth-on'), ask_local: on('setting-auth-local'),
-                       password: document.getElementById('setting-auth-new').value,
-                       current: document.getElementById('setting-auth-current').value };
-        const res = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                               body: JSON.stringify(body) }).then(r => r.json()).catch(e => ({ status: 'error', error: e.message }));
-        if (res.status !== 'success') { showNotification(escapeHtml(res.error), 'error', 5000); return; }
-        document.getElementById('setting-auth-new').value = '';
-        document.getElementById('setting-auth-current').value = '';
-        showNotification(res.enabled ? 'Access password on' : 'Access password off', 'success', 3000);
+    const change = document.getElementById('setting-auth-change');
+    if (change) {
+        change.textContent = st.has_password ? 'Change password' : 'Set password';
+        change.onclick = () => authPasswordDialog(st.has_password, {});
+    }
+    // "Ask on this computer too": no popup, and grey while the password is off.
+    const local = document.getElementById('setting-auth-local');
+    if (local) {
+        const usable = st.enabled;
+        local.style.opacity = usable ? '' : '0.4';
+        local.style.pointerEvents = usable ? '' : 'none';
+        local.closest('.settings-row').title = usable ? '' : 'Switch the access password on first';
+        local.onclick = () => setTimeout(async () => {
+            const on = local.classList.contains('active');
+            if (on === st.ask_local) return;
+            const res = await authPost({ ask_local: on });
+            loadAuthSettings().then(() => {
+                if (res.status !== 'success') settingsLineError('setting-auth-state', res.error);
+            });
+        }, 0);
+    }
+    // The main switch acts at once too (the dialog's generic click handler
+    // flips it first): with a password it asks for it, without one it sets one.
+    const toggle = document.getElementById('setting-auth-on');
+    if (toggle) toggle.onclick = () => setTimeout(async () => {
+        const on = toggle.classList.contains('active');
+        if (on === st.enabled) return;
+        const back = () => toggle.classList.toggle('active', st.enabled);
+        if (!st.has_password) {
+            if (!await authPasswordDialog(false, { enabled: true })) back();
+            return;
+        }
+        if (!on) {
+            const remote = await fetch('/api/remote').then(r => r.json()).catch(() => ({}));
+            if (remote.settings && remote.settings.tunnel_on) {
+                await showChoiceDialog({
+                    title: 'Remote access is on',
+                    html: '<p>While the tunnel runs, anyone on the internet could open rBrowser without the password. Switch the Remote access tunnel off first (below).</p>',
+                    buttons: [{ label: 'OK', primary: true }]
+                });
+                back();
+                return;
+            }
+        }
+        const done = await authAskCurrent(
+            on ? 'Switch the access password on' : 'Switch the access password off',
+            on ? '<p>Type your password: every device will be asked for it.</p>'
+               : '<p>Type your password: after this anyone on your network can open rBrowser without it.</p>',
+            on ? 'Switch on' : 'Switch off', { enabled: on });
+        if (!done) back();
         loadAuthSettings();
-    };
+    }, 0);
+}
+
+function authPost(body) {
+    return fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(body) })
+        .then(r => r.json()).catch(e => ({ status: 'error', error: e.message }));
+}
+
+// Popup asking the current password for one change; again on a wrong one.
+// True once applied, false on Cancel or when locked out.
+async function authAskCurrent(title, html, okLabel, body) {
+    let error = '';
+    for (;;) {
+        const typed = await showChoiceDialog({
+            title, html: html + (error ? `<p style="color:#f85149">${escapeHtml(error)}</p>` : ''),
+            input: { type: 'password', placeholder: 'Your password', maxlength: 200 },
+            buttons: [{ label: 'Cancel', value: null }, { label: okLabel, primary: true, takesInput: true }]
+        });
+        if (typed === null) return false;
+        const res = await authPost({ ...body, current: typed });
+        if (res.status === 'success') return true;
+        error = res.error;
+        // Locked out after too many tries: no point asking again now.
+        if (/Too many/.test(error)) { settingsLineError('setting-auth-state', error); return false; }
+    }
+}
+
+// Set password (none yet) or Change password: the new one twice, and the
+// current one when there is one. extra goes along (enabled: switching on).
+async function authPasswordDialog(hasPassword, extra) {
+    const min = 6;
+    let error = '';
+    for (;;) {
+        const fields = [{ type: 'password', placeholder: 'New password', maxlength: 200 },
+                        { type: 'password', placeholder: 'New password again', maxlength: 200 }];
+        if (hasPassword) fields.unshift({ type: 'password', placeholder: 'Current password', maxlength: 200 });
+        const typed = await showChoiceDialog({
+            title: hasPassword ? 'Change password' : 'Set the access password',
+            html: `<p>At least ${min} characters. Only a hash of it is kept.</p>`
+                + (error ? `<p style="color:#f85149">${escapeHtml(error)}</p>` : ''),
+            inputs: fields,
+            buttons: [{ label: 'Cancel', value: null },
+                      { label: hasPassword ? 'Change' : 'Set', primary: true, takesInput: true }]
+        });
+        if (typed === null) return false;
+        const [current, fresh, again] = hasPassword ? typed : ['', ...typed];
+        if (fresh !== again) { error = 'The two new passwords are not the same'; continue; }
+        if (!fresh) { error = 'Type the new password'; continue; }
+        const res = await authPost({ ...extra, password: fresh, current });
+        if (res.status === 'success') { loadAuthSettings(); return true; }
+        error = res.error;
+        if (/Too many/.test(error)) { settingsLineError('setting-auth-state', error); return false; }
+    }
 }
 
 // Settings > Guest mode (rbrowser/auth.py): its own Apply, like the password.
 async function loadGuestSettings() {
     const state = document.getElementById('setting-guest-state');
     if (!state) return;
+    state.style.color = '';
     let st;
     try { st = await fetch('/api/auth').then(r => r.json()); } catch (e) { return; }
     if (st.status !== 'success') return;
@@ -9096,7 +9504,7 @@ async function loadGuestSettings() {
                        current: document.getElementById('setting-guest-current').value };
         const res = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                                                body: JSON.stringify(body) }).then(r => r.json()).catch(e => ({ status: 'error', error: e.message }));
-        if (res.status !== 'success') { showNotification(escapeHtml(res.error), 'error', 5000); return; }
+        if (res.status !== 'success') { settingsLineError('setting-guest-state', res.error); return; }
         document.getElementById('setting-guest-new').value = '';
         document.getElementById('setting-guest-current').value = '';
         showNotification(res.guest && res.guest.enabled ? 'Guest mode on' : 'Guest mode off', 'success', 3000);
@@ -9153,6 +9561,19 @@ async function loadRemoteSettings(first = true) {
     const ddnsState = document.getElementById('setting-ddns-state');
     ddnsState.textContent = !s.ddns_on ? 'Off.' : d.state === 'ok' ? `OK: ${d.ip}`
         : d.state === 'error' ? `Problem: ${d.result}` : 'Checking…';
+    // A refused change is written on its own line: a notification stays
+    // hidden behind the Settings dialog.
+    const refused = loadRemoteSettings.refused || {};
+    [box, ddnsState].forEach(el => {
+        const r = refused[el.id];
+        const on = r && Date.now() < r.until;
+        if (on) el.textContent = r.text;
+        el.style.color = on ? '#f85149' : '';
+    });
+    // Tunnel up or DDNS name changed: "running on" shows them too.
+    const publicKey = [live ? t.url : '', s.ddns_on ? s.ddns_domain : '', d.state].join('|');
+    if (!first && publicKey !== loadRemoteSettings.publicKey) refreshRunningOn();
+    loadRemoteSettings.publicKey = publicKey;
     if (first) {
         const val = (id, v) => { document.getElementById(id).value = v || ''; };
         document.getElementById('setting-ddns-on').classList.toggle('active', !!s.ddns_on);
@@ -9164,19 +9585,24 @@ async function loadRemoteSettings(first = true) {
             const afraid = document.getElementById('setting-ddns-provider').value === 'afraid';
             document.querySelectorAll('[data-ddns="afraid"]').forEach(el => { el.hidden = !afraid; });
             document.querySelectorAll('[data-ddns="token"]').forEach(el => { el.hidden = afraid; });
+            // afraid's update URL carries only a token: the name is asked
+            // apart, just to show it under "running on".
+            document.getElementById('setting-ddns-domain').placeholder = afraid ? 'myname.mooo.com (optional)' : 'myname.duckdns.org';
         };
         document.getElementById('setting-ddns-provider').onchange = fields;
         fields();
-        const send = async body => {
+        const send = async (body, line) => {
             const res = await fetch('/api/remote', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                                                      body: JSON.stringify(body) }).then(r => r.json()).catch(e => ({ status: 'error', error: e.message }));
-            if (res.status !== 'success') showNotification(escapeHtml(res.error), 'error', 6000);
+            const refused = loadRemoteSettings.refused = loadRemoteSettings.refused || {};
+            if (res.status !== 'success') refused[line] = { text: res.error, until: Date.now() + 10000 };
+            else delete refused[line];
             loadRemoteSettings(false);
             return res;
         };
         // The toggle acts at once (the dialog's generic click handler flips it first).
         tunnel.addEventListener('click', () => setTimeout(async () => {
-            const res = await send({ tunnel_on: tunnel.classList.contains('active') });
+            const res = await send({ tunnel_on: tunnel.classList.contains('active') }, 'setting-remote-state');
             if (res.status !== 'success') tunnel.classList.remove('active');
         }, 0));
         const ddnsApply = async () => {
@@ -9185,7 +9611,7 @@ async function loadRemoteSettings(first = true) {
                                      ddns_provider: document.getElementById('setting-ddns-provider').value,
                                      ddns_url: document.getElementById('setting-ddns-url').value,
                                      ddns_domain: document.getElementById('setting-ddns-domain').value,
-                                     ddns_token: document.getElementById('setting-ddns-token').value });
+                                     ddns_token: document.getElementById('setting-ddns-token').value }, 'setting-ddns-state');
             if (res.status === 'success') showNotification('Dynamic DNS saved', 'success', 3000);
             return res;
         };
@@ -9233,6 +9659,11 @@ function showSettings(category) {
                 </button>`).join('')}
             </div>
             <div class="settings-power">
+                <div class="settings-power-logo">${rbLogo('', true)}<span>rBrowser2 v${escapeHtml(RB_VERSION)}</span></div>
+                <button type="button" class="settings-power-btn reload" onclick="location.reload()"
+                        title="Reload this page (the app window has no F5)">
+                    ${settingsIcon('<path d="M2.8 8a5.2 5.2 0 0 1 9.1-3.4"/><path d="M12.4 1.9v2.9H9.5"/><path d="M13.2 8a5.2 5.2 0 0 1-9.1 3.4"/><path d="M3.6 14.1v-2.9h2.9"/>')}<span>Reload</span>
+                </button>
                 <button type="button" class="settings-power-btn restart" onclick="confirmRestart()"
                         title="Restart rBrowser (asks first)">
                     ${settingsIcon('<path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.75"/><path d="M13 1.8v3h-3"/>')}<span>Restart</span>
@@ -9259,12 +9690,43 @@ function showSettings(category) {
         </div>
 
         <div class="auto-reload-setting" data-cat="system">
+            <div class="settings-label">rBrowser2 running on</div>
+            <div class="settings-running-on" data-running-on>Loading...</div>
+        </div>
+
+        <div class="auto-reload-setting" data-cat="system">
+            <div class="settings-label">Autostart on boot</div>
+            <div class="settings-hint">rBrowser2 starts by itself when this computer starts: Windows and macOS at login,
+                Linux and Termux at boot. Applied at once, no admin rights needed.</div>
+            <div class="settings-row">
+                <span>Start rBrowser2 at boot</span>
+                <div class="toggle-switch" id="setting-autostart" onclick="toggleAutostart(this)"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-hint" id="setting-autostart-note" hidden></div>
+        </div>
+
+        <div class="auto-reload-setting" data-cat="system">
+            <div class="settings-label">Shortcuts</div>
+            <div class="settings-hint">An rBrowser2 icon on the computer rBrowser2 runs on: it opens rBrowser2 in its
+                own window (or a window on it, if it is already running). Applied at once.</div>
+            <div class="settings-row">
+                <span>Icon on the desktop</span>
+                <div class="toggle-switch" id="setting-shortcut-desktop" onclick="toggleShortcut(this, 'desktop')"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row" id="setting-shortcut-menu-row">
+                <span>Icon in the app menu</span>
+                <div class="toggle-switch" id="setting-shortcut-menu" onclick="toggleShortcut(this, 'menu')"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-hint" id="setting-shortcut-note" hidden></div>
+        </div>
+
+        <div class="auto-reload-setting" data-cat="system">
             <div class="settings-label">Apps in the tab bar</div>
             <div class="settings-hint">Each app has its icon next to the page tabs while it is on. The same
                 switches as "Enable" at the top of each app's own settings. Saved with Save.</div>
             ${APP_BAR_SWITCHES.map(([key, label, cat, original]) => `
             <div class="settings-row">
-                <span>${escapeHtml(label)} <button class="settings-link-btn" type="button" onclick="showSettingsCategory('${cat}')" title="Open its settings">›</button></span>
+                <span><button class="settings-link-btn" type="button" onclick="showSettingsCategory('${cat}')" title="Open its settings">›</button> ${escapeHtml(label)}</span>
                 <div class="toggle-switch" id="setting-appbar-${key}" data-mirror="${original}"><div class="toggle-slider"></div></div>
             </div>`).join('')}
         </div>
@@ -9285,6 +9747,10 @@ function showSettings(category) {
                     <option value="top">Top</option>
                     <option value="bottom">Bottom</option>
                 </select>
+            </div>
+            <div class="settings-row">
+                <span title="rBrowser's logo for a few seconds while the page starts">Splash screen on startup</span>
+                <div class="toggle-switch ${splashOn() ? 'active' : ''}" id="setting-splash"><div class="toggle-slider"></div></div>
             </div>
             <div class="settings-row settings-subhead"><span>Sounds</span></div>
             <div class="settings-hint">A short tone for news, kept in this browser. ▶ plays it.</div>
@@ -9316,7 +9782,7 @@ function showSettings(category) {
 
         <div class="auto-reload-setting" data-cat="system">
             <div class="settings-label">Internet check</div>
-            <div class="settings-hint">When on, every 15 seconds rBrowser asks
+            <div class="settings-hint">When on, every 30 seconds (or as chosen below) rBrowser asks
                 a time server the time (one small UDP packet) or opens a connection to hosts you choose
                 (nothing is sent), and says in the terminal, in the status bar and in a notification when the
                 internet goes away and comes back. Reticulum's own interfaces are watched anyway, always.
@@ -9330,6 +9796,12 @@ function showSettings(category) {
                 <select id="setting-netwatch-method" class="settings-select" onchange="showNetwatchMethod()">
                     <option value="ntp">Time server (NTP)</option>
                     <option value="tcp">Connection to hosts (TCP)</option>
+                </select>
+            </div>
+            <div class="settings-row">
+                <span title="How long between two checks. Down after two failed checks in a row, so a long time also means noticing late">Check every</span>
+                <select id="setting-netwatch-every" class="settings-select">
+                    <option value="30">30 seconds</option>
                 </select>
             </div>
             <div class="settings-row" id="setting-netwatch-time-row">
@@ -9351,13 +9823,15 @@ function showSettings(category) {
                 </div>
             </div>
             <div class="settings-hint" id="setting-netwatch-result" hidden></div>
+            <div class="settings-hint" id="setting-netwatch-last" style="margin:0"></div>
         </div>
 
         <div class="auto-reload-setting" data-cat="system">
             <div class="settings-label">Access password</div>
             <div class="settings-hint">rBrowser listens on your network, so a phone can use it: anyone on the same
                 network can open it too, read your messages and use your identities. On a network that is not
-                yours, switch this on. Only a hash of the password is kept. Applied with its own button, at once.</div>
+                yours, switch this on. Only a hash of the password is kept. Every change asks for the password and
+                is applied at once.</div>
             <div class="settings-row">
                 <span title="Every page and every call needs the password first (a session lasts 30 days in that browser)">Ask for a password</span>
                 <div class="toggle-switch" id="setting-auth-on"><div class="toggle-slider"></div></div>
@@ -9367,18 +9841,10 @@ function showSettings(category) {
                 <div class="toggle-switch" id="setting-auth-local"><div class="toggle-slider"></div></div>
             </div>
             <div class="settings-row">
-                <span>New password</span>
-                <input type="password" id="setting-auth-new" class="settings-input" autocomplete="new-password" placeholder="unchanged">
-            </div>
-            <div class="settings-row" id="setting-auth-current-row">
-                <span title="Needed for any change once a password is set">Current password</span>
-                <input type="password" id="setting-auth-current" class="settings-input" autocomplete="current-password">
-            </div>
-            <div class="settings-row">
                 <span id="setting-auth-state" class="settings-hint" style="margin:0"></span>
                 <span>
-                    <button type="button" class="msg-bar-btn" id="setting-auth-logout" title="End the session in this browser">Log out</button>
-                    <button type="button" class="msg-bar-btn primary" id="setting-auth-apply">Apply</button>
+                    <button type="button" class="msg-bar-btn" id="setting-auth-logout" title="Log out of rBrowser in this browser: next time it asks for the password again (a login lasts 30 days otherwise). Use it on a phone or a computer that is not yours. No effect on this computer while 'Ask on this computer too' is off, or while the password is off.">Log out</button>
+                    <button type="button" class="msg-bar-btn primary" id="setting-auth-change">Change password</button>
                 </span>
             </div>
         </div>
@@ -9424,8 +9890,8 @@ function showSettings(category) {
                 <input id="setting-ddns-url" class="settings-input" type="text" spellcheck="false"
                        placeholder="https://freedns.afraid.org/dynamic/update.php?TOKEN">
             </div>
-            <div class="settings-row" data-ddns="token">
-                <span title="DuckDNS: the subdomain (myname or myname.duckdns.org). dynv6: the full name (myname.dynv6.net)">Domain</span>
+            <div class="settings-row">
+                <span title="DuckDNS: the subdomain (myname or myname.duckdns.org). dynv6: the full name (myname.dynv6.net). FreeDNS: your full name, only to show it under 'running on'">Domain</span>
                 <input id="setting-ddns-domain" class="settings-input" type="text" spellcheck="false" placeholder="myname.duckdns.org">
             </div>
             <div class="settings-row" data-ddns="token">
@@ -9695,6 +10161,31 @@ function showSettings(category) {
             </div>
         </div>
 
+        <div class="auto-reload-setting" data-cat="files" id="settings-files-section"${window.rbGuest ? ' hidden' : ''}>
+            <div class="settings-label">File Downloads</div>
+            <div class="settings-hint">Files downloaded from NomadNet nodes and files received in LXMF chats,
+                on the computer running rBrowser. Open and Show work from that computer only.</div>
+            <div class="settings-row files-folder-row">
+                <span title="Where NomadNet downloads are saved. In the app the save window opens here">Download folder</span>
+                <input id="setting-files-folder" class="settings-input" type="text" spellcheck="false">
+            </div>
+            <div class="settings-row">
+                <span title="On: a window asks where to save each file (in the app it opens in the download folder). Off: files go straight into the download folder of the computer running rBrowser">Ask where to save</span>
+                <div class="toggle-switch" id="setting-files-ask"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="files-buttons">
+                <button class="settings-export" type="button" onclick="filesOpenFolder('nomadnet')">Open download folder</button>
+                <button class="settings-export" type="button" onclick="filesDefaultFolder()">Default folder</button>
+            </div>
+            <div class="settings-row settings-subhead"><span>NomadNet downloads</span></div>
+            <div id="files-nomadnet" class="files-list">Loading...</div>
+            <div class="settings-row settings-subhead"><span>Received in LXMF chats</span></div>
+            <div class="files-buttons">
+                <button class="settings-export" type="button" onclick="filesOpenFolder('lxmf')">Open LXMF folder</button>
+            </div>
+            <div id="files-lxmf" class="files-list"></div>
+        </div>
+
         <div class="auto-reload-setting" data-cat="messenger" id="settings-messenger-section">
             <div class="settings-label">LXMF Messenger</div>
             <div class="settings-hint">Send and receive LXMF messages, like NomadNet and Sideband. While on,
@@ -9866,7 +10357,7 @@ function showSettings(category) {
             <div class="settings-row">
                 <span title="Used on the hubs where you chose no nick (Hubs, below, or /nick). Off: those hubs see only your identity hash. A nick is a label, not who you are: your identity is">Default nick</span>
                 <span class="rrc-nick-default">
-                    <input type="text" id="setting-rrc-nick" class="settings-input" maxlength="64" spellcheck="false" autocomplete="off" placeholder="Anonymous Peer">
+                    <input type="text" id="setting-rrc-nick" class="settings-input" maxlength="64" spellcheck="false" autocomplete="off" placeholder="Anonymous Peer rB2">
                     <div class="toggle-switch" id="setting-rrc-nick-on"><div class="toggle-slider"></div></div>
                 </span>
             </div>
@@ -9908,6 +10399,16 @@ function showSettings(category) {
             <div class="settings-row">
                 <span title="People joining and leaving one after the other, on one line: → a, b joined · ← c left. The hub's own messages stay as they are">Compact joins and parts</span>
                 <div class="toggle-switch" id="setting-rrc-compact"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row">
+                <span title="Colours and styles other rBrowsers give their messages (the palette by the message box). Off: their messages in plain text. Other clients never see them">Show colours from others</span>
+                <div class="toggle-switch" id="setting-rrc-colors"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row">
+                <span title="The size of the chat text and of the people list; larger for who reads badly">Chat text size</span>
+                <select id="setting-rrc-font-size" class="settings-select">
+                    ${Array.from({ length: 14 }, (_, i) => i + 11).map(px => `<option value="${px}">${px} px${px === 13 ? ' (default)' : ''}</option>`).join('')}
+                </select>
             </div>
             <div class="settings-row">
                 <span title="The time before each line in the room windows, on a computer. The hub tab always shows it in full">Timestamps in rooms (desktop)</span>
@@ -10138,7 +10639,9 @@ function showSettings(category) {
 
         <div class="auto-reload-setting" data-cat="about">
             <div class="settings-label">About</div>
-            <div class="settings-about" id="settings-version" onclick="aboutVersionTap()">rBrowser v2.0.5b</div>
+            <div class="settings-about-logo">${rbLogo('', true)}
+            <div class="settings-about" id="settings-version" onclick="aboutVersionTap()">rBrowser v2.0.6b</div></div>
+            <div class="settings-running-on" data-running-on>Loading...</div>
             <div class="settings-hint">Beta: some parts of the interface may still have bugs; they are fixed as soon as possible.</div>
             <div class="settings-hint" id="settings-usage" title="rBrowser's Python process; page = this browser tab (Chrome/Edge only)"></div>
             <div class="settings-hint">Standalone Reticulum Browser: NomadNet, LXMF, RRC, BBS &amp; RMAP WebUI Clients</div>
@@ -10217,7 +10720,7 @@ function showSettings(category) {
     dialog.querySelector('#setting-history-max').value = String(historySettings.max_entries);
     dialog.querySelector('#setting-history-age').value = String(historySettings.max_age_days);
 
-    dialog.querySelectorAll('#setting-center, #setting-light-render, #setting-screenshots, #setting-local-name-on, #setting-new-nodes, #setting-clear-search, #setting-prefill, #setting-history-enabled, #setting-cache-enabled, #setting-cache-serve, #setting-msg-enabled, #setting-msg-announce-start, #setting-msg-announce-periodic, #setting-msg-allow-ephemeral, #setting-msg-enforce-stamps, #setting-msg-markdown, #setting-msg-check-contacts, #setting-msg-sideband-look, #setting-msg-autosend, #setting-msg-previews, #setting-msg-autoreply, #setting-msg-echo, #setting-msg-opportunistic, #setting-msg-share-contacts, #setting-bbs-enabled, #setting-bbs-proto-retibbs, #setting-bbs-proto-nomadnet, #setting-bbs-fx, #setting-rmap-enabled, #setting-auth-on, #setting-auth-local, #setting-remote-tunnel, #setting-ddns-on, #setting-rrc-enabled, #setting-rrc-nick-on, #setting-rrc-joins, #setting-rrc-reconnect, #setting-rrc-autoconnect, #setting-rrc-autoconnect-sel, #setting-rrc-rejoin, #setting-rrc-compact, #setting-rrc-ts-desktop, #setting-rrc-ts-short, #setting-rrc-ts-mobile, #setting-rrc-autoclose-nodes, #setting-rrc-notices-hub, #setting-rrc-show-auto, #setting-rrc-notify-mentions, #setting-rrc-notify-messages, #setting-rrc-notify-events, #setting-rrc-autoreply, #setting-rrc-echo, #setting-rrc-away-notice, #setting-rrc-away-nick-on, #setting-rrc-back-notice, #setting-msg-pn-on, #setting-msg-pn-fallback, #setting-msg-pn-failover, #setting-msg-sync-periodic, #setting-favorites-enabled, #setting-favorites-follow, #setting-app-window-lxmf, #setting-app-window-rrc, #setting-app-window-bbs, #setting-app-window-rmap')
+    dialog.querySelectorAll('#setting-center, #setting-light-render, #setting-screenshots, #setting-local-name-on, #setting-new-nodes, #setting-clear-search, #setting-prefill, #setting-history-enabled, #setting-cache-enabled, #setting-cache-serve, #setting-msg-enabled, #setting-msg-announce-start, #setting-msg-announce-periodic, #setting-msg-allow-ephemeral, #setting-msg-enforce-stamps, #setting-msg-markdown, #setting-msg-check-contacts, #setting-msg-sideband-look, #setting-msg-autosend, #setting-msg-previews, #setting-msg-autoreply, #setting-msg-echo, #setting-msg-opportunistic, #setting-msg-share-contacts, #setting-bbs-enabled, #setting-bbs-proto-retibbs, #setting-bbs-proto-nomadnet, #setting-bbs-fx, #setting-rmap-enabled, #setting-auth-on, #setting-auth-local, #setting-remote-tunnel, #setting-ddns-on, #setting-rrc-enabled, #setting-rrc-nick-on, #setting-rrc-joins, #setting-rrc-reconnect, #setting-rrc-autoconnect, #setting-rrc-autoconnect-sel, #setting-rrc-rejoin, #setting-rrc-compact, #setting-rrc-colors, #setting-rrc-ts-desktop, #setting-rrc-ts-short, #setting-rrc-ts-mobile, #setting-rrc-autoclose-nodes, #setting-rrc-notices-hub, #setting-rrc-show-auto, #setting-rrc-notify-mentions, #setting-rrc-notify-messages, #setting-rrc-notify-events, #setting-rrc-autoreply, #setting-rrc-echo, #setting-rrc-away-notice, #setting-rrc-away-nick-on, #setting-rrc-back-notice, #setting-msg-pn-on, #setting-msg-pn-fallback, #setting-msg-pn-failover, #setting-msg-sync-periodic, #setting-favorites-enabled, #setting-favorites-follow, #setting-app-window-lxmf, #setting-app-window-rrc, #setting-app-window-bbs, #setting-app-window-rmap')
           .forEach(toggle => toggle.addEventListener('click', function () {
               this.classList.toggle('active');
           }));
@@ -10249,6 +10752,12 @@ function showSettings(category) {
         hosts.value = s.hosts || s.default_hosts || '';
         document.getElementById('setting-netwatch-time').value = s.time_servers || s.default_time_servers || '';
         document.getElementById('setting-netwatch-method').value = s.method || 'ntp';
+        const every = document.getElementById('setting-netwatch-every');
+        every.innerHTML = (s.every_choices || [30]).map(n =>
+            `<option value="${n}">${netwatchEveryLabel(n)}</option>`).join('');
+        every.value = String(s.every || 30);
+        renderNetwatchLast(s);
+        setTimeout(pollNetwatchLast, 5000);
         showNetwatchMethod();
         on.dataset.loaded = JSON.stringify(readNetwatchChoice());
     }).catch(() => {});
@@ -10265,9 +10774,12 @@ function showSettings(category) {
     loadIdentityState();
     loadServerSettings();
     loadNodeListSettings();
+    loadAutostart();
+    loadShortcuts();
     loadLinkSettings();
     loadCacheSettings();
     loadMessengerSettings();
+    if (!window.rbGuest) loadFilesSettings();
     if (typeof loadRetibbsSettings === 'function') loadRetibbsSettings();
     loadAuthSettings();
     loadRemoteSettings();
@@ -10275,6 +10787,80 @@ function showSettings(category) {
     if (window.rbGuest) lockSettingsForGuest(dialog);
     if (typeof loadRmapSettings === 'function') loadRmapSettings();
     if (typeof loadRrcSettings === 'function') loadRrcSettings();
+}
+
+// ─── Settings > System Setup > Autostart on boot (rbrowser/autostart.py) ───
+// Applied at once, not with Save: it writes outside rBrowser's settings.
+
+function showAutostart(s) {
+    const toggle = document.getElementById('setting-autostart');
+    const note = document.getElementById('setting-autostart-note');
+    if (!toggle || !note) return;
+    toggle.classList.toggle('active', !!s.on);
+    toggle.classList.toggle('disabled', !s.supported || !!s.fixed);
+    note.textContent = s.error || [s.on && s.how ? `On: ${s.how}.` : '', s.note || ''].filter(Boolean).join(' ');
+    note.style.color = s.error ? '#f85149' : '';
+    note.hidden = !note.textContent;
+}
+
+async function loadAutostart() {
+    try { showAutostart(await fetch('/api/autostart').then(r => r.json())); } catch (e) { /* stays empty */ }
+}
+
+async function toggleAutostart(toggle) {
+    if (toggle.classList.contains('disabled') || toggle.dataset.busy) return;
+    toggle.dataset.busy = '1';
+    const on = !toggle.classList.contains('active');
+    try {
+        const res = await fetch('/api/autostart', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({ on }) }).then(r => r.json());
+        if (res.status === 'success') showAutostart(res);
+        else showAutostart({ on: !on, supported: true, error: res.error || 'Not changed' });
+    } catch (e) {
+        showAutostart({ on: !on, supported: true, error: e.message });
+    } finally {
+        delete toggle.dataset.busy;
+    }
+}
+
+// ─── Settings > System Setup > Shortcuts (rbrowser/shortcuts.py) ───
+
+let shortcutState = {};
+
+function showShortcuts(s) {
+    if (!s.error) shortcutState = s;
+    const note = document.getElementById('setting-shortcut-note');
+    const row = document.getElementById('setting-shortcut-menu-row');
+    if (!note || !row) return;
+    for (const kind of ['desktop', 'menu']) {
+        const toggle = document.getElementById(`setting-shortcut-${kind}`);
+        toggle.classList.toggle('active', !!s[kind]);
+        toggle.classList.toggle('disabled', !s.supported);
+    }
+    row.hidden = s.supported && !s.menu_supported;
+    note.textContent = s.error || s.note || s.hint || '';
+    note.style.color = s.error ? '#f85149' : '';
+    note.hidden = !note.textContent;
+}
+
+async function loadShortcuts() {
+    try { showShortcuts(await fetch('/api/shortcuts').then(r => r.json())); } catch (e) { /* stays empty */ }
+}
+
+async function toggleShortcut(toggle, kind) {
+    if (toggle.classList.contains('disabled') || toggle.dataset.busy) return;
+    toggle.dataset.busy = '1';
+    const on = !toggle.classList.contains('active');
+    try {
+        const res = await fetch('/api/shortcuts', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({ kind, on }) }).then(r => r.json());
+        if (res.status === 'success') showShortcuts(res);
+        else showShortcuts({ ...shortcutState, error: res.error || 'Not changed' });
+    } catch (e) {
+        showShortcuts({ ...shortcutState, error: e.message });
+    } finally {
+        delete toggle.dataset.busy;
+    }
 }
 
 // ─── Settings > NomadNet Browser > Node list > Start with recent nodes (rbrowser/node_prefill.py) ───
@@ -10396,6 +10982,147 @@ function refreshIdentityPickers(state) {
     if (typeof refreshRrcIdentityChoices === 'function') refreshRrcIdentityChoices();
     if (typeof refreshRetibbsIdentityChoices === 'function') refreshRetibbsIdentityChoices();
 }
+
+// Settings > File Downloads (rbrowser/files.py): the download folder, "ask
+// where to save", and the files rBrowser has - NomadNet downloads and what
+// the LXMF chats received - to open, show, save on this device or delete.
+let filesState = null;
+
+async function loadFilesSettings() {
+    try {
+        const s = await (await fetch('/api/files')).json();
+        if (s.status !== 'success') throw new Error(s.error || 'error');
+        filesState = s;
+        const folder = document.getElementById('setting-files-folder');
+        const ask = document.getElementById('setting-files-ask');
+        if (!folder || !ask) return;
+        folder.value = s.folder;
+        folder.dataset.loaded = s.folder;
+        ask.classList.toggle('active', !!s.ask);
+        ask.dataset.loaded = s.ask ? '1' : '0';
+        ask.onclick = () => ask.classList.toggle('active');
+        renderFilesList('nomadnet', s.nomadnet);
+        renderFilesList('lxmf', s.lxmf);
+        document.querySelectorAll('#settings-files-section .files-buttons button[onclick^="filesOpenFolder"]')
+            .forEach(b => { b.hidden = !s.local; });
+    } catch (e) {
+        const box = document.getElementById('files-nomadnet');
+        if (box) box.textContent = `Could not read the files: ${e.message}`;
+    }
+}
+
+function renderFilesList(kind, list) {
+    const box = document.getElementById(`files-${kind}`);
+    if (!box) return;
+    if (!list.length) {
+        box.innerHTML = `<div class="files-empty">${kind === 'lxmf' ? 'No files received yet.' : 'No downloads yet.'}</div>`;
+        return;
+    }
+    const local = filesState && filesState.local;
+    box.innerHTML = list.map(f => {
+        const when = new Date(f.mtime * 1000).toLocaleString();
+        const from = f.contact ? ` · from ${escapeHtml(f.contact)}` : '';
+        const ref = `data-kind="${kind}" data-rel="${escapeHtml(f.rel)}"`;
+        return `<div class="files-item">
+            <div class="files-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+            <div class="files-meta">${formatFileSize(f.size)} · ${escapeHtml(when)}${from}</div>
+            <div class="files-actions">
+                ${local ? `<button type="button" ${ref} data-act="open">Open</button>
+                <button type="button" ${ref} data-act="show">Show in folder</button>` : ''}
+                <a href="/api/files/get?kind=${kind}&rel=${encodeURIComponent(f.rel)}" title="Save it on this device">Save</a>
+                <button type="button" class="files-delete" ${ref} data-act="delete">Delete</button>
+            </div>
+        </div>`;
+    }).join('');
+    box.querySelectorAll('button[data-act]').forEach(b => b.addEventListener('click', () => filesAction(b)));
+}
+
+async function filesAction(button) {
+    const { kind, rel, act } = button.dataset;
+    if (act === 'delete' && !button.dataset.sure) {
+        // A second click within 3 s: no popup for a small thing, no slip either.
+        button.dataset.sure = '1';
+        button.textContent = 'Sure?';
+        setTimeout(() => { delete button.dataset.sure; button.textContent = 'Delete'; }, 3000);
+        return;
+    }
+    const url = act === 'delete' ? '/api/files/delete' : '/api/files/open';
+    try {
+        const res = await (await fetch(url, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kind, rel, show: act === 'show' }),
+        })).json();
+        if (res.status !== 'success') throw new Error(res.error || 'error');
+        if (act === 'delete') loadFilesSettings();
+    } catch (e) {
+        showNotification(escapeHtml(e.message), 'error', 6000);
+    }
+}
+
+async function filesOpenFolder(kind) {
+    try {
+        const res = await (await fetch('/api/files/open', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kind, folder: true }),
+        })).json();
+        if (res.status !== 'success') throw new Error(res.error || 'error');
+    } catch (e) {
+        showNotification(escapeHtml(e.message), 'error', 6000);
+    }
+}
+
+function filesDefaultFolder() {
+    const folder = document.getElementById('setting-files-folder');
+    if (folder && filesState) folder.value = filesState.default_folder;
+}
+
+// With Save: sent only when changed. The app is told the folder, so its
+// save window opens there.
+function saveFilesSettings() {
+    const folder = document.getElementById('setting-files-folder');
+    const ask = document.getElementById('setting-files-ask');
+    if (!folder || !ask || folder.dataset.loaded === undefined) return;
+    const askOn = ask.classList.contains('active');
+    if (folder.value.trim() === folder.dataset.loaded && (askOn ? '1' : '0') === ask.dataset.loaded) return;
+    fetch('/api/files/settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: folder.value.trim(), ask: askOn }),
+    }).then(r => r.json()).then(res => {
+        if (res.status !== 'success') {
+            showNotification(`Download folder not saved: ${escapeHtml(res.error || 'error')}`, 'error', 6000);
+            return;
+        }
+        folder.dataset.loaded = res.folder;
+        folder.value = res.folder;
+        ask.dataset.loaded = res.ask ? '1' : '0';
+        filesAsk = !!res.ask;
+        appDownloadFolder(res.folder);
+    }).catch(err => showNotification(`Download folder not saved: ${escapeHtml(err.message)}`, 'error', 5000));
+}
+
+// In the app window: where its save window opens (appwindow.py).
+function appDownloadFolder(folder) {
+    try {
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.set_download_folder) {
+            window.pywebview.api.set_download_folder(folder);
+        }
+    } catch (e) {}
+}
+
+// "Ask where to save", known before a download ends (handleFileDownload).
+let filesAsk = false;    // the server's default too (files.py)
+let filesLocal = false;  // on the computer running rBrowser: saved files can be opened
+function refreshFilesAsk() {
+    if (window.rbGuest) return;
+    fetch('/api/files').then(r => r.json()).then(s => {
+        if (s.status !== 'success') return;
+        filesAsk = !!s.ask;
+        filesLocal = !!s.local;
+        appDownloadFolder(s.folder);
+    }).catch(() => {});
+}
+document.addEventListener('DOMContentLoaded', refreshFilesAsk);
+window.addEventListener('pywebviewready', refreshFilesAsk);   // the app's bridge comes a moment later
 
 async function loadMessengerSettings() {
     let state, ids;
@@ -10804,6 +11531,15 @@ function renderUpdateInfo() {
     const info = updateInfo || {};
     const nav = document.querySelector('.settings-nav-item[data-cat="about"]');
     if (nav) nav.classList.toggle('has-update', !!info.update);
+    // In the top bar too, always: the window can be switched off.
+    const bar = document.getElementById('sb-update');
+    if (bar) {
+        bar.hidden = !info.update;
+        if (info.update) {
+            bar.innerHTML = `<span class="sb-long">New update! (v${escapeHtml(info.remote)})</span><span class="sb-short">Update!</span>`;
+            bar.onclick = () => showSettings('about');
+        }
+    }
     const version = document.getElementById('settings-version');
     if (version && info.local) version.textContent = `rBrowser v${info.local}`;
     const box = document.getElementById('settings-update');
@@ -10908,8 +11644,40 @@ function readNetwatchChoice() {
     const hosts = document.getElementById('setting-netwatch-hosts');
     const time = document.getElementById('setting-netwatch-time');
     const method = document.getElementById('setting-netwatch-method');
+    const every = document.getElementById('setting-netwatch-every');
     return { enabled: !!(on && on.classList.contains('active')), hosts: hosts ? hosts.value.trim() : '',
-             time_servers: time ? time.value.trim() : '', method: method ? method.value : 'ntp' };
+             time_servers: time ? time.value.trim() : '', method: method ? method.value : 'ntp',
+             every: every ? Number(every.value) : 30 };
+}
+
+// "Last check": the round the server really ran and its answer (not
+// guessed from the timer), asked again every few seconds while shown.
+function renderNetwatchLast(s) {
+    const line = document.getElementById('setting-netwatch-last');
+    if (!line) return;
+    if (!s.enabled) { line.textContent = ''; return; }
+    if (!s.last_check) { line.textContent = 'Last check: not yet.'; return; }
+    const ago = Math.max(0, Math.round(s.now - s.last_check));
+    const agoText = ago < 60 ? `${ago} s` : ago < 3600 ? `${Math.floor(ago / 60)} min ${ago % 60} s`
+        : `${Math.floor(ago / 3600)} h ${Math.floor(ago % 3600 / 60)} min`;
+    line.textContent = `Last check: ${new Date(s.last_check * 1000).toLocaleTimeString()}, ${agoText} ago - `
+        + (s.last_ok ? 'answered.' : 'no answer.');
+}
+
+function pollNetwatchLast(next = false) {
+    // One round of asking at a time, however often Settings is opened.
+    if (pollNetwatchLast.running && !next) return;
+    pollNetwatchLast.running = !!document.getElementById('setting-netwatch-last');
+    if (!pollNetwatchLast.running) return;   // Settings closed
+    fetch('/api/netwatch').then(r => r.json()).then(s => {
+        if (s.status === 'success') renderNetwatchLast(s);
+    }).catch(() => {}).finally(() => setTimeout(() => pollNetwatchLast(true), 5000));
+}
+
+// 10 -> "10 seconds", 300 -> "5 minutes", 3600 -> "1 hour".
+function netwatchEveryLabel(seconds) {
+    const [n, unit] = seconds < 60 ? [seconds, 'second'] : seconds < 3600 ? [seconds / 60, 'minute'] : [seconds / 3600, 'hour'];
+    return `${n} ${unit}${n === 1 ? '' : 's'}`;
 }
 
 // Only the list of the method chosen is shown.
@@ -11069,10 +11837,10 @@ async function runSelfUpdate(restart) {
 
 // rBrowser's version on the empty pages of the clients (version.txt, via
 // /api/version): "rBrowser v2.0.0" and the client's name under it, as its title.
-let RB_VERSION = '2.0.5b';
+let RB_VERSION = '2.0.6b';
 
 function clientWelcome(icon, name) {
-    return `<div class="client-welcome"><h2 class="rb-version">rBrowser v${RB_VERSION}</h2>
+    return `<div class="client-welcome">${rbLogo('rb-logo-welcome')}<h2 class="rb-version">rBrowser v${RB_VERSION}</h2>
         <span class="bbs-title">${icon}<span>${name}</span></span></div>`;
 }
 
@@ -11080,6 +11848,9 @@ fetch('/api/version').then(r => r.json()).then(info => {
     if (!info || !info.local || info.local === '?') return;
     RB_VERSION = info.local;
     document.querySelectorAll('.rb-version').forEach(el => { el.textContent = `rBrowser v${RB_VERSION}`; });
+    // Always in sight, before the clock in the top bar.
+    const bar = document.getElementById('sb-version');
+    if (bar) bar.textContent = `rBv${RB_VERSION}`;
 }).catch(() => {});
 
 function aboutVersionTap() {
@@ -12341,11 +13112,52 @@ function loadServerSettings() {
             if (lnOn) lnOn.classList.toggle('active', !!ln.name);
             if (lnName) lnName.value = ln.name || 'rbrowser';
             renderServerNote();
+            renderRunningOn();
         })
         .catch(err => {
             const note = document.getElementById('server-note');
             if (note) note.textContent = `Could not read the server settings: ${err.message}`;
         });
+}
+
+// Only the addresses, without touching the host/port fields being edited.
+function refreshRunningOn() {
+    return fetch('/api/server-settings')
+        .then(r => r.json())
+        .then(s => {
+            if (s.status !== 'success' || !serverSettingsState) return;
+            serverSettingsState.addresses = s.addresses;
+            renderRunningOn();
+        })
+        .catch(() => {});
+}
+
+// System Setup and About, at the top: the addresses to open rBrowser at,
+// from this computer and from the other devices of the home network.
+function renderRunningOn() {
+    const a = (serverSettingsState || {}).addresses || {};
+    const link = url => `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a>`;
+    let html;
+    if (!a.local) {
+        html = `Started by Docker or <code>waitress-serve</code>: the address is the one given there.`;
+    } else {
+        html = `<div><span class="settings-running-label">This device</span>${link(a.local)}</div>`;
+        if (a.local_only) {
+            html += `<div class="settings-hint">Only this device: other devices cannot reach it
+                (host <code>127.0.0.1</code>; <code>0.0.0.0</code> opens it to the home network).</div>`;
+        } else if (a.lan && a.lan.length) {
+            html += a.lan.map(u => `<div><span class="settings-running-label">Home network</span>${link(u)}</div>`).join('');
+        } else {
+            html += `<div class="settings-hint">No home network address found.</div>`;
+        }
+        // Remote access (System Setup): the tunnel's address, and the DDNS
+        // name, which works when the router forwards this port.
+        (a.public || []).forEach(p => {
+            const note = p.kind === 'DDNS' ? ` <span class="settings-hint" style="display:inline">(${p.ok ? 'updated' : 'not updated yet'}; needs this port forwarded on the router)</span>` : '';
+            html += `<div><span class="settings-running-label">Internet (${escapeHtml(p.kind)})</span>${link(p.url)}${note}</div>`;
+        });
+    }
+    document.querySelectorAll('[data-running-on]').forEach(el => { el.innerHTML = html; });
 }
 
 function renderServerNote() {
@@ -12681,12 +13493,11 @@ function saveSettings({ close = false } = {}) {
         }).catch(() => {});
     }
 
+    // Only the choice is saved: the client's tab opens it, in its window or
+    // here, the next time it is clicked.
     for (const kind of Object.keys(APP_WINDOW_OPEN)) {
         const t = document.getElementById(`setting-app-window-${kind}`);
         if (t) try { localStorage.setItem(`rbrowser_app_window_${kind}`, t.classList.contains('active') ? '1' : '0'); } catch (e) {}
-        // Switched on while the client is open here: it moves to its window.
-        if (t && t.classList.contains('active') && !APP_WINDOW
-            && document.getElementById(APP_WINDOW_TABS[kind])?.classList.contains('active')) openAppTab(kind);
     }
 
     const newNodesToggle = document.getElementById('setting-new-nodes');
@@ -12697,6 +13508,7 @@ function saveSettings({ close = false } = {}) {
     }
 
     saveNodeListSettings();
+    saveFilesSettings();
 
     const clearSearchToggle = document.getElementById('setting-clear-search');
     if (clearSearchToggle) {
@@ -12727,6 +13539,10 @@ function saveSettings({ close = false } = {}) {
     if (statusBar) {
         try { localStorage.setItem(STATUSBAR_KEY, statusBar.value); } catch (e) {}
         applyStatusBarPos(statusBar.value);
+    }
+    const splash = document.getElementById('setting-splash');
+    if (splash) {
+        try { localStorage.setItem(SPLASH_KEY, splash.classList.contains('active') ? 'on' : 'off'); } catch (e) {}
     }
     saveSoundSettingsFromDialog();
 
@@ -14143,6 +14959,14 @@ function getStatusBarPos() {
     try { return localStorage.getItem(STATUSBAR_KEY) === 'bottom' ? 'bottom' : 'top'; } catch (e) { return 'top'; }
 }
 
+// The splash screen at startup (Settings > System Setup, on by default):
+// the server leaves it out of the page when it is off (index.html).
+const SPLASH_KEY = 'rbrowser_splash';
+
+function splashOn() {
+    try { return localStorage.getItem(SPLASH_KEY) !== 'off'; } catch (e) { return true; }
+}
+
 function applyStatusBarPos(pos) {
     document.body.classList.toggle('sb-bottom', pos === 'bottom');
     document.body.classList.toggle('sb-top', pos !== 'bottom');
@@ -14196,7 +15020,44 @@ setInterval(tickStatusClock, 1000);
 function usageText(u) {
     if (!u || u.status !== 'success') return '';
     const page = performance.memory ? ` · page ${Math.round(performance.memory.usedJSHeapSize / 1048576)} MB` : '';
-    return `CPU ${u.cpu}% · RAM ${Math.round(u.rss_mb)} MB${page}`;
+    const b = shownBattery(u);
+    const bat = b ? ` · battery ${batteryText(b)}` : '';
+    return `CPU ${u.cpu}% · RAM ${Math.round(u.rss_mb)} MB${page}${bat}`;
+}
+
+// The battery of the machine rBrowser runs on (/api/usage), when it has one.
+// From another device (a phone on the LAN or through the tunnel) that one
+// would be the PC's: the device's own instead, where the browser tells it
+// (navigator.getBattery: Chrome/Edge, only on https or localhost), else none.
+let deviceBattery = null;
+if (navigator.getBattery) {
+    navigator.getBattery().then(m => {
+        const read = () => {
+            deviceBattery = { percent: Math.round(m.level * 100), plugged: m.charging, device: true };
+        };
+        read();
+        m.addEventListener('levelchange', read);
+        m.addEventListener('chargingchange', () => { read(); refreshUsage(); });
+    }).catch(() => {});
+}
+
+function shownBattery(u) {
+    return u.local === false ? deviceBattery : u.battery;
+}
+
+const BATTERY_ICON = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="4.5" width="11.5" height="7" rx="1.2"/><path d="M14.5 6.8v2.4"/></svg>';
+const CHARGING_ICON = '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M9 1.5 3.5 9h4L6.5 14.5 12.5 7h-4z"/></svg>';
+
+function batteryText(b) {
+    return `${b.percent}%${b.plugged ? ' plugged in' : ''}${b.watts ? ` ${b.watts} W` : ''}`;
+}
+
+function batteryStat(b) {
+    const color = b.plugged ? '#40ed3a' : b.percent <= 15 ? '#ef4444' : b.percent <= 30 ? '#f59e0b' : '';
+    const tip = `${b.device ? 'Battery of this device' : 'Battery of the machine rBrowser runs on'}: ${b.percent}%, ${b.plugged ? 'plugged in' : 'on battery'}`
+        + (b.watts ? `, ${b.watts} W` : '');
+    return `<span class="sb-stat" title="${tip}"><span class="sb-ico"${color ? ` style="color:${color}"` : ''}>${b.plugged ? CHARGING_ICON : BATTERY_ICON}</span>`
+        + `<span class="count">${b.percent}%${b.watts ? ` ${b.watts} W` : ''}</span></span>`;
 }
 
 async function refreshUsage() {
@@ -14209,7 +15070,8 @@ async function refreshUsage() {
         // Built like the rows above: grey label, blue value.
         const stat = (label, value) => `<span class="sb-stat"><span class="sb-label sb-keep">${label}:</span><span class="count">${value}</span></span>`;
         badge.innerHTML = text ? stat('CPU', `${u.cpu}%`) + stat('RAM', `${Math.round(u.rss_mb)} MB`)
-            + (performance.memory ? stat('Page', `${Math.round(performance.memory.usedJSHeapSize / 1048576)} MB`) : '') : '';
+            + (performance.memory ? stat('Page', `${Math.round(performance.memory.usedJSHeapSize / 1048576)} MB`) : '')
+            + (shownBattery(u) ? batteryStat(shownBattery(u)) : '') : '';
         badge.title = text ? `rBrowser (Python, PID ${u.pid}): CPU ${u.cpu}% of the machine, RAM ${u.rss_mb} MB, ${u.threads} threads`
             + (performance.memory ? `\nThis page (browser tab): ${Math.round(performance.memory.usedJSHeapSize / 1048576)} MB of JavaScript memory` : '') : '';
     }

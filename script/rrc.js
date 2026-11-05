@@ -13,6 +13,8 @@ const Rrc = {
     open: false,
     active: null,           // {hub, room}
     inputs: {},             // what was being typed, per window
+    drafts: {},             // its own colours, per window (rrcDraftSync)
+    draft: { text: '', st: [] },
     history: [],
     historyAt: -1,
     backStack: [],          // windows seen, for going back when one closes
@@ -145,11 +147,21 @@ function ensureRrcTab() {
             <div class="bbs-input-row rrc-input-row" id="rrc-input-row" hidden>
                 <div class="rrc-cmds" id="rrc-cmds" hidden role="listbox"></div>
                 <div class="rrc-emojis" id="rrc-emojis" hidden></div>
+                <div class="rrc-style" id="rrc-style" hidden></div>
+                <div class="rrc-sel" id="rrc-sel" hidden>
+                    <button class="rrc-style-tog" data-rrc-tog="B" style="font-weight:700" title="Bold" tabindex="-1">B</button>
+                    <button class="rrc-style-tog" data-rrc-tog="I" style="font-style:italic" title="Italic" tabindex="-1">I</button>
+                    <button class="rrc-style-tog" data-rrc-tog="U" style="text-decoration:underline" title="Underline" tabindex="-1">U</button>
+                    <button class="rrc-style-tog" data-rrc-sel-palette="1" title="Colours for the selection" tabindex="-1">🎨</button>
+                    <button class="rrc-style-tog" data-rrc-reset="1" title="The selection plain again" tabindex="-1">⌀</button>
+                </div>
+                <div class="rrc-mirror" id="rrc-mirror" aria-hidden="true"></div>
                 <span class="rrc-prompt" id="rrc-prompt"></span>
                 <button class="rrc-emoji-btn rrc-cmds-btn" id="rrc-cmds-btn" title="Commands (or type /)" aria-label="Commands">/</button>
+                <button class="rrc-emoji-btn rrc-style-btn" id="rrc-style-btn" title="Colours and styles: they stay on until Reset (only rBrowser shows them)" aria-label="Colours and styles">🎨</button>
                 <textarea aria-label="Message" id="rrc-input" class="bbs-input rrc-input-area" rows="1" spellcheck="false" autocomplete="off"
                        placeholder="Message - Shift+Enter new line, /help for the commands, Tab completes a nick, ↑↓ earlier lines"></textarea>
-                <button class="rrc-emoji-btn" id="rrc-emoji-btn" title="Emoji" aria-label="Emoji">☺</button>
+                <button class="rrc-emoji-btn" id="rrc-emoji-btn" title="Emoji" aria-label="Emoji">😀</button>
                 <button class="msg-send" id="rrc-send" title="Send (Enter)" aria-label="Send"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 8l11-5.5L9.5 14 7.5 9z" fill="currentColor"/></svg></button>
             </div>
         </div>`;
@@ -390,26 +402,10 @@ function bindRrcView(view) {
         else cmds.hidden = true;
         input.focus();
     });
-    const emojis = view.querySelector('#rrc-emojis');
-    view.querySelector('#rrc-emoji-btn').addEventListener('mousedown', e => {
-        e.preventDefault();
-        if (!emojis.childElementCount) emojis.innerHTML = RRC_EMOJIS.map(x => `<button class="rrc-emoji" data-rrc-emoji="${x}" tabindex="-1">${x}</button>`).join('');
-        emojis.hidden = !emojis.hidden;
-    });
-    emojis.addEventListener('mousedown', e => {
-        const item = e.target.closest('[data-rrc-emoji]');
-        if (!item) return;
-        e.preventDefault();                 // the input keeps the focus
-        const at = input.selectionStart ?? input.value.length;
-        const end = input.selectionEnd ?? at;
-        input.value = input.value.slice(0, at) + item.dataset.rrcEmoji + input.value.slice(end);
-        const pos = at + item.dataset.rrcEmoji.length;
-        input.setSelectionRange(pos, pos);
-        input.focus();
-    });
+    bindRrcEmojis(view, input);
+    bindRrcStyle(view, input);
     document.addEventListener('mousedown', e => {
         if (!cmds.hidden && !e.target.closest('#rrc-cmds, #rrc-cmds-btn, #rrc-input')) cmds.hidden = true;
-        if (!emojis.hidden && !e.target.closest('#rrc-emojis, #rrc-emoji-btn')) emojis.hidden = true;
     });
     input.addEventListener('keydown', e => {
         // Shift+Enter: a new line in the message; the field grows.
@@ -465,6 +461,7 @@ function bindRrcView(view) {
             Rrc.historyAt = e.key === 'ArrowUp'
                 ? Math.min(Rrc.history.length - 1, Rrc.historyAt + 1) : Math.max(-1, Rrc.historyAt - 1);
             input.value = Rrc.historyAt < 0 ? '' : Rrc.history[Rrc.historyAt];
+            rrcDraftReset(input.value);
             rrcGrow(input);
         }
     });
@@ -509,6 +506,7 @@ function rrcGrow(input, retry = true) {
     const tall = input.value.includes('\n') || input.scrollHeight > input.clientHeight + 2;
     input.classList.toggle('tall', tall);
     if (tall) input.style.height = `${Math.min(input.scrollHeight + 2, 6 * 20 + 18)}px`;
+    rrcMirror(input);
 }
 window.addEventListener('resize', () => rrcGrow(document.getElementById('rrc-input'), false));
 
@@ -528,7 +526,7 @@ document.addEventListener('keydown', e => {
 const RRC_NODES_AUTOCLOSE_WIDTH = 1200;
 
 function rrcSmallScreen() {
-    return window.innerWidth < RRC_NODES_AUTOCLOSE_WIDTH && !window.matchMedia('(max-width: 767px)').matches;
+    return window.innerWidth < RRC_NODES_AUTOCLOSE_WIDTH && !window.matchMedia('(max-width: 767px), (pointer: coarse) and (max-height: 500px)').matches;
 }
 
 function rrcAutoCloseNodes() {
@@ -652,11 +650,18 @@ function applyRrcVisibility() {
 
 // ─── Polling ────────────────────────────────────────────────
 
+// The size of the chat text (Settings > RRC), 13 px unless changed.
+function rrcFontSize() {
+    const px = parseInt(rrcSetting('font_size', 13), 10);
+    document.documentElement.style.setProperty('--rrc-font', `${px >= 11 && px <= 24 ? px : 13}px`);
+}
+
 async function pollRrc() {
     if (Rrc.busy) return;
     Rrc.busy = true;
     try {
         try { Rrc.state = await fetch('/api/rrc').then(r => r.json()); } catch (e) { return; }
+        rrcFontSize();
         if (typeof syncAutoReplyButton === 'function') syncAutoReplyButton('rrc');
         applyRrcVisibility();
         const live = (Rrc.state.hubs || []);
@@ -776,30 +781,50 @@ function rrcCounts(line, me) {
     return !!line.src && line.src !== me && ['msg', 'action', 'notice'].includes(line.kind);
 }
 
+// The Sound button in the bar: RRC sounds off on the fly, popups stay.
+let rrcMuted = (() => { try { return localStorage.getItem('rbrowser_rrc_mute') === '1'; } catch (e) { return false; } })();
+const RRC_SOUND_ON = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 6h3l4-3v10l-4-3H2z" fill="currentColor"/><path d="M11 5.5a3.5 3.5 0 0 1 0 5M12.8 3.5a6 6 0 0 1 0 9" stroke="currentColor" stroke-width="1.3" fill="none"/></svg>';
+const RRC_SOUND_OFF = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 6h3l4-3v10l-4-3H2z" fill="currentColor"/><path d="M11 6l4 4M15 6l-4 4" stroke="currentColor" stroke-width="1.4"/></svg>';
+
+function rrcSound(name) {
+    if (!rrcMuted && typeof playSound === 'function') playSound(name);
+}
+
+function rrcSoundButton() {
+    return `<button class="msg-bar-btn rrc-sound-btn${rrcMuted ? ' muted' : ''}" onclick="toggleRrcSound()" aria-label="RRC sounds"
+        title="${rrcMuted ? 'RRC sounds: off (click: on)' : 'RRC sounds: on (click: off, popups stay)'}">${rrcMuted ? RRC_SOUND_OFF : RRC_SOUND_ON}</button>`;
+}
+
+function toggleRrcSound() {
+    rrcMuted = !rrcMuted;
+    try { localStorage.setItem('rbrowser_rrc_mute', rrcMuted ? '1' : '0'); } catch (e) {}
+    document.querySelectorAll('.rrc-sound-btn').forEach(b => { b.outerHTML = rrcSoundButton(); });
+}
+
 // News while you look elsewhere: the sound always (Settings > System Setup >
 // Sounds decides if it plays), the popup as the RRC settings say.
 function rrcAlert(address, line, me) {
     if (typeof appWindowElsewhere === 'function' && appWindowElsewhere('rrc')) return;   // its window tells
     // Someone comes into one of your rooms: a sound only (off by default).
     if (line.kind === 'join' && line.src && line.src !== me && line.room) {
-        if (typeof playSound === 'function') playSound('rrc_join');
+        rrcSound('rrc_join');
         return;
     }
     if (!rrcCounts(line, me)) return;
     // The sound also in the window you are looking at; the popup
     // only for the others.
     if (rrcLooking(address, line.room) && document.hasFocus()) {
-        if (typeof playSound === 'function') playSound(line.mention ? 'rrc_mention' : 'rrc_message');
+        rrcSound(line.mention ? 'rrc_mention' : 'rrc_message');
         return;
     }
     // Who and where only, never the text: a bot's long lines made huge popups.
     const where = line.room ? `Channel: #${line.room}` : `Hub: ${(rrcHub(address) || {}).name || 'RRC'}`;
     const text = `New message from: <b>${rrcEsc(line.nick)}</b><br>${rrcEsc(where)}`;
     if (line.mention) {
-        if (typeof playSound === 'function') playSound('rrc_mention');
+        rrcSound('rrc_mention');
         if (rrcSetting('notify_mentions', true)) showNotification(text, 'info', 6000);
     } else {
-        if (typeof playSound === 'function') playSound('rrc_message');
+        rrcSound('rrc_message');
         if (rrcSetting('notify_messages', false)) showNotification(text, 'info', 4000);
     }
 }
@@ -808,7 +833,7 @@ function rrcAlert(address, line, me) {
 function rrcStateChanged(address, before, now) {
     if (!before || before === now || now === 'connecting') return;
     if (typeof appWindowElsewhere === 'function' && appWindowElsewhere('rrc')) return;
-    if (typeof playSound === 'function') playSound('rrc_state');
+    rrcSound('rrc_state');
     const h = rrcHub(address);
     const name = (h && h.name) || address.slice(0, 12);
     const what = { connected: 'connected', closed: 'disconnected', failed: 'could not connect' }[now] || now;
@@ -820,7 +845,7 @@ function rrcStateChanged(address, before, now) {
 function rrcEventLine(address, line) {
     if (line.kind !== 'error' || !/^(kicked|banned) from /i.test(line.text)) return;
     if (typeof appWindowElsewhere === 'function' && appWindowElsewhere('rrc')) return;
-    if (typeof playSound === 'function') playSound('rrc_state');
+    rrcSound('rrc_state');
     if (rrcSetting('notify_events', true)) showNotification(`RRC: ${rrcEsc(line.text)}`, 'warning', 6000);
 }
 
@@ -968,9 +993,9 @@ function rrcLineEl(line, pane, me) {
         div.dataset.replyText = line.text || '';
     }
     if (line.kind === 'msg') {
-        div.innerHTML = `${ts}<span class="rrc-who"${cont ? ' aria-hidden="true"' : ''}>&lt;${nickHtml}&gt;</span><span class="rrc-text">${rrcQuoted(line.text)}</span>`;
+        div.innerHTML = `${ts}<span class="rrc-who"${cont ? ' aria-hidden="true"' : ''}>&lt;${nickHtml}&gt;</span><span class="rrc-text">${rrcLineHtml(line, own)}</span>`;
     } else if (line.kind === 'action') {
-        div.innerHTML = `${ts}<span class="rrc-text" style="color:${color}">* ${nickHtml} ${rrcText(line.text)}</span>`;
+        div.innerHTML = `${ts}<span class="rrc-text" style="color:${color}">* ${nickHtml} ${rrcLineHtml(line, own)}</span>`;
     } else if (line.kind === 'notice') {
         // From a person: "Notice: text (by nick)", the nick only here (other
         // clients show notices with no sender); from the hub: ℹ text.
@@ -1102,9 +1127,10 @@ function showRrcRoom(hub, room = '', back = false) {
     if (row) row.hidden = !hub;
     const input = document.getElementById('rrc-input');
     if (input && hub) {
+        Rrc.draft = Rrc.drafts[key] || (Rrc.drafts[key] = { text: '', st: [] });
         input.value = Rrc.inputs[key] || '';
         rrcGrow(input);
-        if (Rrc.open && !window.matchMedia('(max-width: 700px)').matches) input.focus();
+        if (Rrc.open && !window.matchMedia('(max-width: 700px), (pointer: coarse) and (max-height: 500px)').matches) input.focus();
     }
     Rrc.historyAt = -1;
     rrcReadInFront();
@@ -1247,7 +1273,7 @@ function renderRrcHead() {
             <button class="msg-bar-btn" data-rrc-act="menu" title="${room ? 'The room\'s menu' : 'The hub\'s menu'} (also right-click on the tab or in the window)">${room ? '#Menu' : 'Hub Menu'}</button>
             ${room ? `<button class="msg-bar-btn${rrcUsersOn() ? ' on' : ''}" data-rrc-act="users" title="Show or hide the people">${RRC_USER_ICON} ${r ? r.members.length : 0}</button>` : ''}
             <button class="msg-bar-btn" data-rrc-act="nick" title="Your nick on this hub (/nick)">Nick</button>
-            <button class="msg-bar-btn auto-reply-btn${typeof autoReplyAnyOn === 'function' && autoReplyAnyOn('rrc') ? ' on' : ''}" data-kind="rrc" onclick="toggleAutoReplyMenu(this, 'rrc')" title="Automatic replies: keywords, away, echo (green dot: one is on)">AutoReply</button>${awayButton('rrc')}
+            <button class="msg-bar-btn auto-reply-btn${typeof autoReplyAnyOn === 'function' && autoReplyAnyOn('rrc') ? ' on' : ''}" data-kind="rrc" onclick="toggleAutoReplyMenu(this, 'rrc')" title="Automatic replies: keywords, away, echo (green dot: one is on)">AutoReply</button>${awayButton('rrc')}${rrcSoundButton()}
             ${on || hub.state === 'connecting'
                 ? '<button class="msg-bar-btn danger" data-rrc-act="disconnect">Disconnect</button>'
                 : '<button class="msg-bar-btn primary" data-rrc-act="connect">Connect</button>'}
@@ -1260,7 +1286,7 @@ function renderRrcHead() {
     if (prompt && prompt.dataset.html !== p) { prompt.dataset.html = p; prompt.innerHTML = p; }
 }
 
-function rrcNarrow() { return window.matchMedia('(max-width: 700px)').matches; }
+function rrcNarrow() { return window.matchMedia('(max-width: 700px), (pointer: coarse) and (max-height: 500px)').matches; }
 
 function rrcUsersOn() { return rrcNarrow() ? Rrc.usersPhone : Rrc.users; }
 
@@ -1279,7 +1305,7 @@ function renderRrcUsers() {
     const grip = document.getElementById('rrc-users-grip');
     if (grip) grip.hidden = box.hidden;
     if (box.hidden) return;
-    if (!Rrc.dragging) box.style.width = window.matchMedia('(max-width: 700px)').matches ? '' : `${rrcUsersWidth()}px`;
+    if (!Rrc.dragging) box.style.width = window.matchMedia('(max-width: 700px), (pointer: coarse) and (max-height: 500px)').matches ? '' : `${rrcUsersWidth()}px`;
     // Two people with the same nick (a client's default, "Anonymous Peer"):
     // the start of the hash tells them apart.
     const seen = {};
@@ -1454,16 +1480,16 @@ async function rrcCloseWindow(hub, room) {
     pollRrc();
 }
 
-async function rrcRun(text, split = false) {
+async function rrcRun(text, split = false, fmt = null) {
     if (!Rrc.active) return;
     const { hub, room } = Rrc.active;
-    const res = await rrcPost(`/api/rrc/input/${hub}`, { room, text, split });
+    const res = await rrcPost(`/api/rrc/input/${hub}`, fmt ? { room, text, split, fmt } : { room, text, split });
     // Over the hub's limit: in parts "(1/3) ...", if you say so (NomadNet's way).
     if (res.too_long) {
         const ok = await confirmDialog('Message too long',
             `This hub takes ${res.max} bytes per message. Send it in <b>${res.parts} parts</b>, each starting with (1/${res.parts})…?`,
             `Send ${res.parts} parts`);
-        if (ok) return rrcRun(text, true);
+        if (ok) return rrcRun(text, true, fmt);
         const input = document.getElementById('rrc-input');
         if (input && !input.value) input.value = text;
         return;
@@ -1486,13 +1512,16 @@ async function rrcSend() {
     if (!input || !Rrc.active) return;
     const text = input.value.trim();
     if (!text) return;
+    const fmt = rrcFmtFor(input.value);
     input.value = '';
+    rrcDraftReset('');
+    rrcGrow(input);
     Rrc.inputs[rrcKey(Rrc.active.hub, Rrc.active.room)] = '';
     if (Rrc.history[0] !== text) Rrc.history.unshift(text);
     Rrc.history.length = Math.min(Rrc.history.length, 50);
     Rrc.historyAt = -1;
     rrcDropMarker(rrcKey(Rrc.active.hub, Rrc.active.room));      // you answered: seen
-    await rrcRun(text);
+    await rrcRun(text, false, fmt);
     if (Rrc.active) showRrcRoom(Rrc.active.hub, Rrc.active.room);
 }
 
@@ -1897,11 +1926,6 @@ async function rrcOpenLink(link) {
     showRrcRoom(hub, res.room);
 }
 
-const RRC_EMOJIS = ['😀', '😂', '🤣', '😊', '😉', '😍', '😎', '🤔', '😅', '😭', '😡', '😱',
-    '👍', '👎', '👋', '🙏', '👏', '💪', '🤝', '✌️', '🎉', '🔥', '❤️', '💯',
-    '✅', '❌', '⚠️', '❓', '💡', '📡', '📻', '🛰️', '🌍', '⚡', '🔒', '🔑',
-    '☕', '🍺', '🍕', '🐱', '🐶', '🌙', '☀️', '🌧️', '😴', '🤖', '👀', '🚀'];
-
 // What the colours and signs in the chat mean.
 function rrcShowLegend() {
     const row = (sample, text) => `<div class="rrc-legend-row"><span class="rrc-legend-sample">${sample}</span><span>${text}</span></div>`;
@@ -2076,10 +2100,12 @@ const RRC_COMMANDS = [
     ['kick', '<room> <nick|hash>', 'Remove from the room', 'op'],
     ['ban', '<room> list', 'The room\'s ban list', 'hub'],
     ['ban', '<room> add|del <nick|hash>', 'Ban or lift (absent: full hash)', 'op'],
+    ['unban', '[room] <nick|hash>', 'Lift a ban (= /ban room del)', 'op'],
     ['invite', '<room> add|del|list [nick|hash]', 'Invite list (rooms +i)', 'op'],
     ['register', '<room>', 'The hub keeps the room', 'founder'],
     ['unregister', '<room>', 'Unregister the room', 'founder'],
     ['kline', 'add|del|list [nick|hash]', 'Ban from the whole hub', 'sop'],
+    ['unkline', '<nick|hash>', 'Lift a K-line (= /kline del)', 'sop'],
     ['stats', '', 'Hub statistics', 'sop'],
     ['reload', '', 'Reload the hub configuration', 'sop'],
 ];
@@ -2177,6 +2203,7 @@ async function loadRrcSettings() {
     set('setting-rrc-autoconnect-sel', st.settings.autoconnect_selected !== false);
     set('setting-rrc-rejoin', st.settings.rejoin_rooms !== false);
     set('setting-rrc-compact', !!st.settings.compact_joins);
+    set('setting-rrc-colors', st.settings.show_colors !== false);
     set('setting-rrc-ts-desktop', st.settings.room_ts_desktop !== false);
     set('setting-rrc-ts-short', !!st.settings.room_ts_short);
     set('setting-rrc-ts-mobile', st.settings.room_ts_mobile !== false);
@@ -2201,6 +2228,7 @@ async function loadRrcSettings() {
     value('setting-rrc-away-notice-text', st.settings.away_notice_text);
     value('setting-rrc-away-nick', st.settings.away_nick || '');
     value('setting-rrc-away-notice-every', String(st.settings.away_notice_every || 0));
+    value('setting-rrc-font-size', String(st.settings.font_size || 13));
     value('setting-rrc-back-notice-text', st.settings.back_notice_text);
     value('setting-rrc-autoreply-scope', st.settings.autoreply_scope || 'all');
     const nick = document.getElementById('setting-rrc-nick');
@@ -2351,6 +2379,7 @@ function saveRrcSettings() {
         autoconnect_selected: on('setting-rrc-autoconnect-sel'),
         rejoin_rooms: on('setting-rrc-rejoin'),
         compact_joins: on('setting-rrc-compact'),
+        show_colors: on('setting-rrc-colors'),
         room_ts_desktop: on('setting-rrc-ts-desktop'),
         room_ts_short: on('setting-rrc-ts-short'),
         room_ts_mobile: on('setting-rrc-ts-mobile'),
@@ -2371,6 +2400,7 @@ function saveRrcSettings() {
                                ['away_notice_text', 'setting-rrc-away-notice-text'],
                                ['away_nick', 'setting-rrc-away-nick'],
                                ['away_notice_every', 'setting-rrc-away-notice-every'],
+                               ['font_size', 'setting-rrc-font-size'],
                                ['back_notice_text', 'setting-rrc-back-notice-text'],
                                ['autoreply_scope', 'setting-rrc-autoreply-scope']]
             .filter(([, id]) => document.getElementById(id))
@@ -2389,3 +2419,641 @@ function saveRrcSettings() {
 }
 
 startRrcPolling();
+
+// ─── Colours and styles of a message, the emoji pages ──────
+
+// rBrowser's own key in the message (K_FMT in rrc.py): [[start, length,
+// style], ...] in characters of the text, beside the plain text, so other
+// clients show it as it is. The style you pick stays on until Reset.
+const RRC_MIRC = ['#ffffff', '#000000', '#00007f', '#009300', '#ff0000', '#7f0000', '#9c009c', '#fc7f00',
+    '#ffff00', '#00fc00', '#009393', '#00ffff', '#0000fc', '#ff00ff', '#7f7f7f', '#d2d2d2'];
+const RRC_MIRC_NAMES = ['White', 'Black', 'Navy', 'Green', 'Red', 'Maroon', 'Purple', 'Orange',
+    'Yellow', 'Lime', 'Teal', 'Cyan', 'Blue', 'Magenta', 'Grey', 'Light grey'];
+// The effects: their colours, one after the other or blended.
+const RRC_FX = {
+    rainbow: ['#ff4d4d', '#ff9f1a', '#ffe14d', '#4dff88', '#4dd2ff', '#6b8cff', '#c46bff'],
+    fire: ['#ff3b1f', '#ff6a00', '#ff9500', '#ffc300', '#ffe066'],
+    ocean: ['#5fa8ff', '#00b4d8', '#48cae4', '#90e0ef', '#0096c7'],
+    neon: ['#ff2bd6', '#00f0ff', '#b8ff00', '#ff8a00'],
+    pastel: ['#ffb3ba', '#ffdfba', '#ffffba', '#baffc9', '#bae1ff', '#e0bbff'],
+    matrix: ['#00ff41', '#00c832', '#39ff14', '#7dff9b'],
+    sunset: ['#ff5e62', '#ff9966', '#ffcc70', '#c06c84', '#8f7bb5'],
+    candy: ['#ff6fb5', '#ffd1e8', '#8fd3ff', '#c3a6ff'],
+    gold: ['#d4a017', '#ffd700', '#fff3a0', '#ffc94d'],
+    ice: ['#e0f7ff', '#a8e6ff', '#6fd3ff', '#3fb8ff'],
+    toxic: ['#9dff00', '#39ff14', '#00ff9c', '#c6ff00'],
+    aurora: ['#00ffa3', '#00d4ff', '#7b61ff', '#ff61d8'],
+    lava: ['#ff2a00', '#ff6a00', '#ff3d3d', '#ffb000'],
+    retro: ['#ff71ce', '#01cdfe', '#05ffa1', '#b967ff', '#fffb96'],
+    forest: ['#52b788', '#74c69d', '#95d5b2', '#b7e4c7'],
+    silver: ['#ffffff', '#d2d2d2', '#a8a8a8', '#d2d2d2'],
+};
+// Text and back together, one tap (a phone has no right click).
+const RRC_PRESETS = [[0, 4], [1, 8], [0, 12], [8, 2], [1, 9], [0, 6], [1, 11], [0, 1], [1, 0],
+    [9, 1], [8, 1], [7, 1], [0, 3], [0, 10], [1, 7], [0, 13], [0, 5], [11, 2]];
+const RRC_STYLE_TABS = { c: 'Colours', s: 'Presets', x: 'Effects' };
+const RRC_FX_PATTERNS = { c: 'Letters', w: 'Words', g: 'Gradient' };
+const RRC_CHAT_BG = '#0d1117';
+
+function rrcStyleGet() {
+    try {
+        const s = JSON.parse(localStorage.getItem('rrc_style') || '{}');
+        return s && typeof s === 'object' ? s : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function rrcStyleSet(style) {
+    try { localStorage.setItem('rrc_style', JSON.stringify(style)); } catch (e) { /* private window */ }
+    rrcStyleShow();
+}
+
+function rrcStyleOn(style) {
+    return ['f', 'b', 'B', 'I', 'U', 'x'].some(k => style[k] !== undefined && style[k] !== null);
+}
+
+function rrcIsCommand(text) {
+    const t = String(text || '').trimStart();
+    return t.startsWith('/') && !t.startsWith('//');
+}
+
+// A part of the message can have a style of its own (a word selected, then
+// the palette or the small bar over it): one per character of the box, on
+// top of the style for the whole message. It follows the box as you type:
+// what is typed takes the style of the character before it, what is
+// deleted takes its styles away.
+function rrcDraftSync(value) {
+    const d = Rrc.draft;
+    if (d.text === value) return d;
+    const a = Array.from(d.text), b = Array.from(value);
+    let p = 0;
+    while (p < a.length && p < b.length && a[p] === b[p]) p++;
+    let s = 0;
+    while (s < a.length - p && s < b.length - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
+    const keep = p > 0 ? d.st[p - 1] : undefined;
+    d.st = d.st.slice(0, p).concat(new Array(b.length - p - s).fill(keep), d.st.slice(a.length - s, a.length));
+    d.st.length = b.length;
+    d.text = value;
+    return d;
+}
+
+function rrcDraftReset(value) {
+    Rrc.draft.text = value;
+    Rrc.draft.st = [];
+}
+
+// A character's style: the message's, under its own (-1, 0, '' = off).
+function rrcStyleMerge(g, c) {
+    const has = k => !!c && c[k] !== undefined;
+    const pick = k => (has(k) ? c[k] : g[k]);
+    const out = {};
+    const x = has('x') ? c.x : (has('f') && c.f >= 0 ? '' : g.x);
+    const f = pick('f'), b = pick('b');
+    if (x && RRC_FX[x]) {
+        out.x = x;
+        out.p = RRC_FX_PATTERNS[pick('p')] ? pick('p') : 'c';
+    } else if (Number.isInteger(f) && f >= 0 && f < 16) out.f = f;
+    if (Number.isInteger(b) && b >= 0 && b < 16) out.b = b;
+    for (const k of ['B', 'I', 'U']) if (pick(k)) out[k] = 1;
+    return out;
+}
+
+// The style of every character of the box; none for a command.
+function rrcDraftStyles(value) {
+    const d = rrcDraftSync(value);
+    if (rrcIsCommand(value)) return Array.from(value, () => ({}));
+    const g = rrcStyleGet();
+    return Array.from(value, (ch, i) => rrcStyleMerge(g, d.st[i]));
+}
+
+// The colours of a message about to go (raw = the box as typed; it goes
+// trimmed): runs of characters with one style, as [start, length, style].
+function rrcFmtFor(raw) {
+    if (rrcIsCommand(raw)) return null;
+    const chars = Array.from(raw);
+    const styles = rrcDraftStyles(raw);
+    let a = 0, z = chars.length;
+    while (a < z && /\s/.test(chars[a])) a++;
+    while (z > a && /\s/.test(chars[z - 1])) z--;
+    const out = [];
+    let run = null;
+    for (let i = a; i < z; i++) {
+        const key = JSON.stringify(styles[i]);
+        if (run && run.key === key) run.span[1]++;
+        else {
+            run = { key, span: [i - a, 1, styles[i]] };
+            if (key !== '{}') out.push(run.span);
+        }
+    }
+    return out.length ? out.slice(0, 64) : null;
+}
+
+// The selection in the box, in characters: none for a command, nothing
+// selected or the box not in use.
+function rrcSelRange(input) {
+    if (!input || document.activeElement !== input || input.selectionStart === input.selectionEnd
+        || rrcIsCommand(input.value)) return null;
+    const cp = at => Array.from(input.value.slice(0, at)).length;
+    return [cp(input.selectionStart), cp(input.selectionEnd)];
+}
+
+// A pick of the palette (or of the small bar) on the selected characters.
+function rrcDraftApply(input, [a, b], el, back) {
+    const d = rrcDraftSync(input.value);
+    const g = rrcStyleGet();
+    const eff = i => rrcStyleMerge(g, d.st[i]);
+    const every = test => { for (let i = a; i < b; i++) if (!test(eff(i))) return false; return true; };
+    let change = null;
+    if (el.dataset.rrcColor !== undefined) {
+        const v = parseInt(el.dataset.rrcColor, 10);
+        const k = back ? 'b' : 'f';
+        change = c => { c[k] = v < 0 ? -1 : v; if (k === 'f') c.x = ''; };
+    } else if (el.dataset.rrcTog) {
+        const k = el.dataset.rrcTog, on = every(s => s[k]);
+        change = c => { c[k] = on ? 0 : 1; };
+    } else if (el.dataset.rrcFx) {
+        const name = el.dataset.rrcFx, on = every(s => s.x === name);
+        change = (c, s) => { c.x = on ? '' : name; if (!on) c.p = s.p || 'c'; };
+    } else if (el.dataset.rrcSwap) {
+        change = (c, s) => {
+            c.f = Number.isInteger(s.b) ? s.b : -1;
+            c.b = Number.isInteger(s.f) ? s.f : -1;
+            c.x = '';
+        };
+    } else if (el.dataset.rrcPreset) {
+        const [f, bg] = el.dataset.rrcPreset.split(',').map(Number);
+        change = c => { c.f = f; c.b = bg; c.x = ''; };
+    } else if (el.dataset.rrcPat) {
+        change = c => { c.p = el.dataset.rrcPat; };
+    } else if (!el.dataset.rrcReset) {
+        return;
+    }
+    for (let i = a; i < b; i++) {
+        if (!change) { d.st[i] = undefined; continue; }
+        const c = Object.assign({}, d.st[i]);
+        change(c, eff(i));
+        d.st[i] = c;
+    }
+    rrcStyleShow();
+}
+
+function rrcLum(hex) {
+    const c = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+        .map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+}
+
+function rrcContrast(a, b) {
+    const x = rrcLum(a), y = rrcLum(b);
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+}
+
+// Its CSS: a colour that would vanish on the chat (black, navy...) gets a
+// light background; the same colour as its background is left out.
+function rrcStyleCss(st, flat = false) {
+    const css = [];
+    const bg = Number.isInteger(st.b) ? RRC_MIRC[st.b] : null;
+    const fg = Number.isInteger(st.f) && !st.x ? RRC_MIRC[st.f] : null;
+    let chip = !!bg;
+    if (bg) css.push(`background:${bg}`);
+    if (fg) {
+        if (bg && rrcContrast(fg, bg) < 1.6) css.push(`color:${rrcContrast('#ffffff', bg) > rrcContrast('#000000', bg) ? '#ffffff' : '#000000'}`);
+        else css.push(`color:${fg}`);
+        if (!bg && rrcContrast(fg, RRC_CHAT_BG) < 2.5) { css.push('background:#c9d1d9'); chip = true; }
+    } else if (bg && !st.x) {
+        css.push(`color:${rrcContrast('#ffffff', bg) > rrcContrast('#000000', bg) ? '#ffffff' : '#000000'}`);
+    }
+    // The chat is near bold already: bigger too, but not in the box (flat).
+    if (st.B) css.push(flat ? 'font-weight:700' : 'font-weight:700;font-size:calc(1em + 1px)');
+    if (st.I) css.push('font-style:italic');
+    if (st.U) css.push('text-decoration:underline');
+    return { css: css.join(';'), chip };
+}
+
+function rrcGraphemes(text) {
+    if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+        return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text), s => s.segment);
+    }
+    return Array.from(text);
+}
+
+function rrcMix(a, b, t) {
+    const v = (h, i) => parseInt(h.slice(i, i + 2), 16);
+    const out = [1, 3, 5].map(i => Math.round(v(a, i) + (v(b, i) - v(a, i)) * t).toString(16).padStart(2, '0'));
+    return '#' + out.join('');
+}
+
+// An effect, one colour per letter or word, or a gradient over the text.
+function rrcFxHtml(text, fx, pattern) {
+    const pal = RRC_FX[fx] || RRC_FX.rainbow;
+    const parts = rrcGraphemes(text);
+    const visible = parts.filter(g => g.trim()).length;
+    let html = '', n = 0, word = 0, inWord = false;
+    for (const g of parts) {
+        if (!g.trim()) {
+            html += rrcEsc(g);
+            inWord = false;
+            continue;
+        }
+        if (!inWord) { word++; inWord = true; }
+        let color;
+        if (pattern === 'w') color = pal[(word - 1) % pal.length];
+        else if (pattern === 'g') {
+            const t = visible > 1 ? n / (visible - 1) * (pal.length - 1) : 0;
+            const i = Math.min(Math.floor(t), pal.length - 2);
+            color = pal.length > 1 ? rrcMix(pal[i], pal[i + 1], t - i) : pal[0];
+        } else color = pal[n % pal.length];
+        html += `<span style="color:${color}">${rrcEsc(g)}</span>`;
+        n++;
+    }
+    return html;
+}
+
+function rrcStyled(text, st, whole) {
+    const { css, chip } = rrcStyleCss(st);
+    let inner;
+    if (st.x) {
+        const m = whole ? /^> ([^\n]*)\n([\s\S]+)$/.exec(text) : null;
+        inner = m ? `<span class="rrc-quote">${rrcText(m[1])}</span>${rrcFxHtml(m[2], st.x, st.p)}` : rrcFxHtml(text, st.x, st.p);
+    } else {
+        inner = whole ? rrcQuoted(text) : rrcText(text);
+    }
+    return `<span class="rrc-fmt${chip ? ' rrc-fmt-chip' : ''}" style="${css}">${inner}</span>`;
+}
+
+// A message with its colours; the parts with none as usual.
+function rrcFmtHtml(text, fmt) {
+    const chars = Array.from(String(text || ''));
+    const spans = (Array.isArray(fmt) ? fmt : [])
+        .filter(s => Array.isArray(s) && s.length === 3 && s[2] && typeof s[2] === 'object')
+        .sort((a, b) => a[0] - b[0]);
+    if (spans.length === 1 && spans[0][0] === 0 && spans[0][1] >= chars.length) {
+        return rrcStyled(chars.join(''), spans[0][2], true);
+    }
+    let html = '', at = 0;
+    for (const [start, size, st] of spans) {
+        if (start < at) continue;
+        if (start > at) html += rrcText(chars.slice(at, start).join(''));
+        html += rrcStyled(chars.slice(start, start + size).join(''), st, false);
+        at = start + size;
+    }
+    if (at < chars.length) html += rrcText(chars.slice(at).join(''));
+    return html;
+}
+
+function rrcLineHtml(line, own) {
+    if (line.fmt && (own || rrcSetting('show_colors', true) !== false)) return rrcFmtHtml(line.text, line.fmt);
+    return line.kind === 'msg' ? rrcQuoted(line.text) : rrcText(line.text);
+}
+
+// The box shows the message as it will go: the textarea's own text is
+// transparent and a copy of it, coloured, is drawn under it (same font,
+// size and wrapping: the mono font keeps every character in its place).
+// A command, or no colour at all, and the textarea draws its text itself.
+function rrcMirrorHtml(chars, styles, mark) {
+    let html = '';
+    for (let i = 0; i < chars.length;) {
+        if (i === mark) html += '<span data-rrc-mark></span>';
+        const key = JSON.stringify(styles[i]);
+        let j = i + 1;
+        while (j < chars.length && j !== mark && JSON.stringify(styles[j]) === key) j++;
+        const text = chars.slice(i, j).join('');
+        const st = styles[i];
+        if (key === '{}') html += rrcEsc(text);
+        else html += `<span style="${rrcStyleCss(st, true).css}">${st.x ? rrcFxHtml(text, st.x, st.p) : rrcEsc(text)}</span>`;
+        i = j;
+    }
+    if (mark >= chars.length) html += '<span data-rrc-mark></span>';
+    return html + ' ';                      // a last empty line keeps its height
+}
+
+function rrcMirror(input, mark) {
+    const mirror = document.getElementById('rrc-mirror');
+    if (!input || !mirror) return null;
+    const chars = Array.from(input.value);
+    const styles = rrcDraftStyles(input.value);
+    const styled = styles.some(s => Object.keys(s).length);
+    input.classList.toggle('rrc-styled', styled);
+    mirror.classList.toggle('on', styled);
+    const cs = getComputedStyle(input);
+    for (const p of ['fontFamily', 'fontSize', 'lineHeight', 'letterSpacing', 'paddingTop', 'paddingBottom', 'paddingLeft',
+        'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'borderRadius', 'tabSize']) {
+        mirror.style[p] = cs[p];
+    }
+    // A scroll bar in the textarea (over six lines): its text is narrower.
+    const bar = input.offsetWidth - input.clientWidth - parseFloat(cs.borderLeftWidth) - parseFloat(cs.borderRightWidth);
+    mirror.style.paddingRight = `${parseFloat(cs.paddingRight) + Math.max(0, bar)}px`;
+    Object.assign(mirror.style, {
+        left: `${input.offsetLeft}px`, top: `${input.offsetTop}px`,
+        width: `${input.offsetWidth}px`, height: `${input.offsetHeight}px`,
+    });
+    mirror.innerHTML = rrcMirrorHtml(chars, styles, mark);
+    mirror.scrollTop = input.scrollTop;
+    return mirror;
+}
+
+// The small bar over a selection: bold, italic, underline, the palette
+// for it, plain again.
+function rrcSelBar(input) {
+    const bar = document.getElementById('rrc-sel');
+    const box = document.getElementById('rrc-style');
+    if (!bar || !input) return;
+    const range = rrcSelRange(input);
+    if (!range || (box && !box.hidden)) {
+        bar.hidden = true;
+        return;
+    }
+    const mirror = rrcMirror(input, range[0]);
+    const mark = mirror && mirror.querySelector('[data-rrc-mark]');
+    const row = input.offsetParent;
+    bar.hidden = false;
+    if (mark && row) {
+        const x = mark.getBoundingClientRect().left - row.getBoundingClientRect().left;
+        bar.style.left = `${Math.max(4, Math.min(x - 10, row.clientWidth - bar.offsetWidth - 4))}px`;
+    }
+    rrcMirror(input);
+}
+
+function rrcStyleShow() {
+    const input = document.getElementById('rrc-input');
+    const btn = document.getElementById('rrc-style-btn');
+    if (!input) return;
+    const st = rrcStyleGet();
+    rrcMirror(input);
+    if (btn) {
+        btn.classList.toggle('active', rrcStyleOn(st));
+        btn.style.setProperty('--rrc-style-dot', st.x ? `linear-gradient(90deg,${(RRC_FX[st.x] || []).join(',')})`
+            : Number.isInteger(st.f) ? RRC_MIRC[st.f] : Number.isInteger(st.b) ? RRC_MIRC[st.b] : '#c9d1d9');
+    }
+    const box = document.getElementById('rrc-style');
+    if (box && !box.hidden) rrcStyleRender(box);
+}
+
+// Left click a colour for the text, right click (long press) for the back;
+// the sample on top shows the message as it will look. With a word
+// selected in the box, everything here is for that word only.
+function rrcStyleRender(box) {
+    const input = document.getElementById('rrc-input');
+    const range = rrcSelRange(input);
+    const st = range ? rrcStyleMerge(rrcStyleGet(), rrcDraftSync(input.value).st[range[0]]) : rrcStyleGet();
+    const sample = range ? Array.from(input.value).slice(range[0], range[1]).join('').slice(0, 14) : 'Hello';
+    const touch = matchMedia('(pointer: coarse)').matches;
+    const tab = RRC_STYLE_TABS[box.dataset.tab] ? box.dataset.tab : 'c';
+    const hint = range ? 'for the selection only' : tab === 's' ? 'text and back in one tap'
+        : tab === 'x' ? 'one colour per letter, word or a gradient' : touch ? 'tap: text · hold: back' : 'left: text · right: back';
+    const sw = RRC_MIRC.map((c, i) => `<button class="rrc-swatch${st.f === i && !st.x ? ' on' : ''}${st.b === i ? ' on-b' : ''}"
+        data-rrc-color="${i}" style="background:${c}" title="${RRC_MIRC_NAMES[i]}" aria-label="${RRC_MIRC_NAMES[i]}" tabindex="-1"></button>`).join('');
+    const chip = (k, label) => {
+        const v = k === 'f' && st.x ? `linear-gradient(90deg,${(RRC_FX[st.x] || []).join(',')})` : Number.isInteger(st[k]) ? RRC_MIRC[st[k]] : null;
+        return `<span class="rrc-style-chip ${k}" title="${label}"><i style="${v ? `background:${v}` : ''}">${v ? '' : '⌀'}</i>${label}</span>`;
+    };
+    const tog = (k, label, css) => `<button class="rrc-style-tog${st[k] ? ' on' : ''}" data-rrc-tog="${k}" style="${css}" tabindex="-1">${label}</button>`;
+    const fx = Object.keys(RRC_FX).map(name => `<button class="rrc-fx${st.x === name ? ' on' : ''}" data-rrc-fx="${name}" tabindex="-1"
+        title="${name}">${rrcFxHtml(name, name, 'c')}</button>`).join('');
+    const pat = Object.entries(RRC_FX_PATTERNS).map(([k, label]) => `<button class="rrc-style-tog${(st.p || 'c') === k ? ' on' : ''}"
+        data-rrc-pat="${k}" tabindex="-1"${st.x ? '' : ' disabled'}>${label}</button>`).join('');
+    const presets = RRC_PRESETS.map(([f, bg]) => `<button class="rrc-preset${st.f === f && st.b === bg && !st.x ? ' on' : ''}"
+        data-rrc-preset="${f},${bg}" style="color:${RRC_MIRC[f]};background:${RRC_MIRC[bg]}" tabindex="-1"
+        title="${RRC_MIRC_NAMES[f]} on ${RRC_MIRC_NAMES[bg]}">Ab</button>`).join('');
+    const tabs = Object.entries(RRC_STYLE_TABS).map(([k, label]) =>
+        `<button class="rrc-style-tab${tab === k ? ' on' : ''}" data-rrc-tab="${k}" tabindex="-1">${label}</button>`).join('');
+    const body = tab === 's' ? `<div class="rrc-presets">${presets}</div>`
+        : tab === 'x' ? `<div class="rrc-fxs">${fx}</div><div class="rrc-style-row">${pat}<span class="rrc-style-gap"></span>
+            <button class="rrc-style-reset" data-rrc-nobg="1" tabindex="-1" title="Take the background away"${Number.isInteger(st.b) ? '' : ' disabled'}>No BG</button></div>`
+        : `<div class="rrc-swatches">${sw}<button class="rrc-swatch rrc-swatch-none" data-rrc-color="-1"
+            title="None" aria-label="None" tabindex="-1">⌀</button><button class="rrc-swatch rrc-swatch-none" data-rrc-swap="1"
+            title="Swap text and back" aria-label="Swap text and back" tabindex="-1">⇄</button></div>`;
+    box.classList.toggle('rrc-style-sel', !!range);
+    box.innerHTML = `
+        <div class="rrc-style-row">
+            <span class="rrc-style-sample">${rrcStyled(sample, st, false)}</span>
+            <span class="rrc-style-gap"></span>
+            ${tog('B', 'B', 'font-weight:700')}${tog('I', 'I', 'font-style:italic')}${tog('U', 'U', 'text-decoration:underline')}
+            <button class="rrc-style-tog rrc-style-close" data-rrc-close="1" tabindex="-1"
+                title="Close: the style stays on until Reset" aria-label="Close">×</button>
+        </div>
+        <div class="rrc-style-row">${chip('f', 'Text')}${chip('b', 'Back')}<span class="rrc-style-gap"></span>
+            <span class="rrc-style-hint">${hint}</span></div>
+        ${body}
+        <div class="rrc-style-row">${tabs}<span class="rrc-style-gap"></span>
+            <button class="rrc-style-reset" data-rrc-reset="1" tabindex="-1"
+                title="${range ? 'The selection plain again' : 'Back to plain text'}">Reset</button></div>`;
+}
+
+function rrcStylePick(el, back) {
+    if (el.dataset.rrcNobg) return rrcStylePick({ dataset: { rrcColor: '-1' } }, true);
+    const input = document.getElementById('rrc-input');
+    const range = rrcSelRange(input);
+    if (range) return rrcDraftApply(input, range, el, back);
+    const st = rrcStyleGet();
+    if (el.dataset.rrcColor !== undefined) {
+        const k = back ? 'b' : 'f';
+        const v = parseInt(el.dataset.rrcColor, 10);
+        if (v < 0) delete st[k];
+        else {
+            st[k] = v;
+            if (k === 'f') delete st.x;         // a colour or an effect
+        }
+    } else if (el.dataset.rrcTog) {
+        st[el.dataset.rrcTog] = st[el.dataset.rrcTog] ? undefined : 1;
+    } else if (el.dataset.rrcFx) {
+        if (st.x === el.dataset.rrcFx) delete st.x;
+        else { st.x = el.dataset.rrcFx; delete st.f; st.p = st.p || 'c'; }
+    } else if (el.dataset.rrcSwap) {
+        const f = st.x ? undefined : st.f, bg = st.b;
+        delete st.x;
+        if (Number.isInteger(bg)) st.f = bg; else delete st.f;
+        if (Number.isInteger(f)) st.b = f; else delete st.b;
+    } else if (el.dataset.rrcPreset) {
+        [st.f, st.b] = el.dataset.rrcPreset.split(',').map(Number);
+        delete st.x;
+    } else if (el.dataset.rrcPat) {
+        st.p = el.dataset.rrcPat;
+    } else if (el.dataset.rrcReset) {
+        for (const k of Object.keys(st)) delete st[k];
+        if (input) rrcDraftReset(input.value);  // the parts too: all plain
+    }
+    rrcStyleSet(JSON.parse(JSON.stringify(st)));
+}
+
+function bindRrcStyle(view, input) {
+    const box = view.querySelector('#rrc-style');
+    const btn = view.querySelector('#rrc-style-btn');
+    if (!box || !btn) return;
+    try { box.dataset.tab = localStorage.getItem('rrc_style_tab') || 'c'; } catch (err) { box.dataset.tab = 'c'; }
+    btn.addEventListener('mousedown', e => {
+        e.preventDefault();
+        box.hidden = !box.hidden;
+        if (!box.hidden) {
+            rrcStyleRender(box);
+            const emojis = view.querySelector('#rrc-emojis');
+            if (emojis) emojis.hidden = true;
+        }
+        input.focus();
+    });
+    let rightDown = false;
+    box.addEventListener('mousedown', e => {
+        e.preventDefault();                 // the input keeps the focus
+        const el = e.target.closest('button');
+        rightDown = e.button === 2;
+        if (el && el.dataset.rrcClose) {
+            box.hidden = true;
+            input.focus();
+            rrcSelBar(input);
+            return;
+        }
+        if (el && el.dataset.rrcTab) {
+            box.dataset.tab = el.dataset.rrcTab;
+            try { localStorage.setItem('rrc_style_tab', el.dataset.rrcTab); } catch (err) { /* private window */ }
+            rrcStyleRender(box);
+            return;
+        }
+        if (el && !el.disabled && (e.button === 0 || (rightDown && el.dataset.rrcColor !== undefined))) rrcStylePick(el, rightDown);
+    });
+    box.addEventListener('contextmenu', e => {
+        e.preventDefault();
+        // A long press on a phone: no right button came before it.
+        const el = e.target.closest('[data-rrc-color]');
+        if (el && !rightDown) rrcStylePick(el, true);
+        rightDown = false;
+    });
+    document.addEventListener('mousedown', e => {
+        // A click inside it redraws it: the button clicked is gone by now.
+        if (!box.hidden && e.target.isConnected && !e.target.closest('#rrc-style, #rrc-style-btn, #rrc-sel')) box.hidden = true;
+    });
+    const bar = view.querySelector('#rrc-sel');
+    if (bar) {
+        bar.addEventListener('mousedown', e => {
+            e.preventDefault();             // the selection stays
+            const el = e.target.closest('button');
+            if (!el) return;
+            if (el.dataset.rrcSelPalette) {
+                box.hidden = false;
+                rrcStyleRender(box);
+                const emojis = view.querySelector('#rrc-emojis');
+                if (emojis) emojis.hidden = true;
+            } else rrcStylePick(el, false);
+            rrcSelBar(input);
+        });
+        input.addEventListener('blur', () => { bar.hidden = true; });
+    }
+    const sel = () => requestAnimationFrame(() => {
+        rrcSelBar(input);
+        if (!box.hidden) rrcStyleRender(box);
+    });
+    document.addEventListener('selectionchange', () => { if (document.activeElement === input) sel(); });
+    for (const ev of ['select', 'mouseup', 'keyup']) input.addEventListener(ev, sel);
+    input.addEventListener('scroll', () => {
+        const mirror = view.querySelector('#rrc-mirror');
+        if (mirror) mirror.scrollTop = input.scrollTop;
+    });
+    if (window.ResizeObserver) new ResizeObserver(() => rrcMirror(input)).observe(input);
+    rrcStyleShow();
+}
+
+// The emoji: ten a page, two rows of five; the first page is the ones you
+// use most (counted in this browser), then the groups, faces first.
+const RRC_EMOJI_GROUPS = [
+    ['😀', 'Faces', '😀 😃 😄 😁 😆 😅 🤣 😂 🙂 🙃 😉 😊 😇 🥰 😍 🤩 😘 😗 😚 😙 🥲 😋 😛 😜 🤪 😝 🤑 🤗 🤭 🫢 🤫 🤔 🫡 🤐 🤨 😐 😑 😶 🫥 😏 😒 🙄 😬 🤥 😌 😔 😪 🤤 😴 😷 🤒 🤕 🤢 🤮 🤧 🥵 🥶 🥴 😵 😵‍💫 🤯 🤠 🥳 🥸 😎 🤓 🧐 😕 🫤 😟 🙁 ☹️ 😮 😯 😲 😳 🥺 🥹 😦 😧 😨 😰 😥 😢 😭 😱 😖 😣 😞 😓 😩 😫 🥱 😤 😡 😠 🤬 🫠 😈 👿 💀 ☠️ 💩 🤡 👹 👻 👽 🤖 😺 😸 😹 😻 😼 🙈 🙉 🙊'],
+    ['👍', 'Hands', '👍 👎 👌 🤌 🤏 ✌️ 🤞 🫰 🤟 🤘 🤙 👈 👉 👆 👇 ☝️ 👋 🤚 🖐️ ✋ 🖖 👏 🙌 🫶 👐 🤲 🤝 🙏 ✍️ 💪 🫵 👀 🧠 🦾 🤷 🤦 🙋 🙆 🙅 💁'],
+    ['❤️', 'Hearts', '❤️ 🧡 💛 💚 💙 💜 🖤 🤍 🤎 💔 ❤️‍🔥 💕 💞 💓 💗 💖 💘 💝 💯 💢 💥 💫 💦 💨 🔥 ✨ ⭐ 🌟 🎉 🎊'],
+    ['🐶', 'Nature', '🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🐔 🐧 🐦 🦆 🦅 🦉 🐺 🐗 🐴 🦄 🐝 🐛 🦋 🐌 🐢 🐍 🐙 🐬 🐳 🦈 🌵 🌲 🌴 🌸 🌻 🍀 🍁 🌍 🌙 ☀️ ⛅ 🌧️ ⛈️ ❄️ 🌈'],
+    ['🍕', 'Food', '☕ 🍺 🍻 🍷 🥂 🍸 🍕 🍔 🍟 🌭 🥪 🍝 🍣 🍜 🥐 🍞 🧀 🥚 🍳 🥓 🍰 🎂 🍩 🍪 🍫 🍦 🍎 🍌 🍉 🍇 🍓 🍒 🍑 🍋 🌶️ 🥕 🍄 🥑 🍆 🥦'],
+    ['⚽', 'Activity', '⚽ 🏀 🏈 🎾 🏐 🎮 🕹️ 🎲 🎯 🎸 🎧 🎤 🎬 📷 🚗 🚲 🏍️ ✈️ 🚀 🛰️ 🚢 🏠 🏔️ 🏖️ 🗺️ 🏆 🥇 🎁 🎈 🎄'],
+    ['💡', 'Objects', '📡 📻 📶 🔋 🔌 💻 🖥️ ⌨️ 🖱️ 📱 ☎️ 💾 💿 🔧 🔨 🛠️ ⚙️ 🔩 🧲 🔬 🔭 💡 🔦 📦 ✉️ 📨 📝 📌 📎 🔒 🔓 🔑 🗝️ ⏰ ⌛ 📅 💰 💸 🧾 🤖'],
+    ['✅', 'Symbols', '✅ ❌ ⚠️ ❓ ❗ ‼️ ⁉️ 🆗 🆕 🆒 🆘 ⛔ 🚫 ♻️ ⚡ ☢️ 🔴 🟠 🟡 🟢 🔵 🟣 ⚫ ⚪ ➡️ ⬅️ ⬆️ ⬇️ 🔁 🔄 ➕ ➖ ✖️ 💤 💬 💭 🗯️ 📢 🔔 🔕 ℹ️ 🎵'],
+    ['🏁', 'Flags', '🇮🇹 🇪🇺 🇬🇧 🇺🇸 🇩🇪 🇫🇷 🇪🇸 🇵🇹 🇳🇱 🇧🇪 🇨🇭 🇦🇹 🇵🇱 🇷🇺 🇺🇦 🇧🇷 🇯🇵 🏴‍☠️ 🏳️‍🌈 🏁'],
+];
+const RRC_EMOJI_FIRST = ['😂', '😀', '😉', '😏', '🙄', '😅', '👍', '❤️', '🤔', '😎'];
+
+// The pages: [group index (-1 = most used), the ten on it].
+function rrcEmojiPages() {
+    const pages = [[-1, rrcEmojiTop()]];
+    RRC_EMOJI_GROUPS.forEach(([, , list], g) => {
+        const all = list.split(' ');
+        for (let i = 0; i < all.length; i += 10) pages.push([g, all.slice(i, i + 10)]);
+    });
+    return pages;
+}
+
+function rrcEmojiUse() {
+    try {
+        const u = JSON.parse(localStorage.getItem('rrc_emoji_use') || '{}');
+        return u && typeof u === 'object' ? u : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function rrcEmojiTop() {
+    const use = rrcEmojiUse();
+    const top = Object.keys(use).sort((a, b) => use[b] - use[a]).slice(0, 10);
+    for (const e of RRC_EMOJI_FIRST) if (top.length < 10 && !top.includes(e)) top.push(e);
+    return top;
+}
+
+function rrcEmojiCount(emoji) {
+    const use = rrcEmojiUse();
+    use[emoji] = (use[emoji] || 0) + 1;
+    try { localStorage.setItem('rrc_emoji_use', JSON.stringify(use)); } catch (e) { /* private window */ }
+}
+
+function rrcEmojiRender(box, page) {
+    const pages = rrcEmojiPages();
+    page = (page + pages.length) % pages.length;
+    box.dataset.page = String(page);
+    const [group, list] = pages[page];
+    const firstOf = g => pages.findIndex(p => p[0] === g);
+    const inGroup = pages.filter(p => p[0] === group).length;
+    const nth = page - firstOf(group) + 1;
+    const groups = [['★', 'Most used', -1], ...RRC_EMOJI_GROUPS.map(([icon, name], g) => [icon, name, g])]
+        .map(([icon, name, g]) => `<button class="rrc-egroup${g === group ? ' on' : ''}" data-rrc-egroup="${g}"
+            title="${name}" tabindex="-1">${icon}</button>`).join('');
+    const label = group < 0 ? 'Most used' : RRC_EMOJI_GROUPS[group][1] + (inGroup > 1 ? ` ${nth}/${inGroup}` : '');
+    box.innerHTML = `<div class="rrc-emoji-grid">${list.map(x =>
+        `<button class="rrc-emoji" data-rrc-emoji="${x}" tabindex="-1">${x}</button>`).join('')}</div>
+        <div class="rrc-emoji-label">${label}</div>
+        <div class="rrc-emoji-nav">
+            <button class="rrc-epage" data-rrc-epage="-1" title="Page before" aria-label="Page before" tabindex="-1">‹</button>
+            <div class="rrc-egroups">${groups}</div>
+            <button class="rrc-epage" data-rrc-epage="1" title="Next page" aria-label="Next page" tabindex="-1">›</button>
+        </div>`;
+}
+
+function bindRrcEmojis(view, input) {
+    const emojis = view.querySelector('#rrc-emojis');
+    view.querySelector('#rrc-emoji-btn').addEventListener('mousedown', e => {
+        e.preventDefault();
+        emojis.hidden = !emojis.hidden;
+        if (!emojis.hidden) {
+            rrcEmojiRender(emojis, 0);      // the most used, as they are now
+            const style = view.querySelector('#rrc-style');
+            if (style) style.hidden = true;
+        }
+    });
+    emojis.addEventListener('mousedown', e => {
+        e.preventDefault();                 // the input keeps the focus
+        const page = parseInt(emojis.dataset.page || '0', 10);
+        const nav = e.target.closest('[data-rrc-epage]');
+        if (nav) { rrcEmojiRender(emojis, page + parseInt(nav.dataset.rrcEpage, 10)); return; }
+        const grp = e.target.closest('[data-rrc-egroup]');
+        if (grp) {
+            const g = parseInt(grp.dataset.rrcEgroup, 10);
+            rrcEmojiRender(emojis, Math.max(0, rrcEmojiPages().findIndex(p => p[0] === g)));
+            return;
+        }
+        const item = e.target.closest('[data-rrc-emoji]');
+        if (!item) return;
+        const at = input.selectionStart ?? input.value.length;
+        const end = input.selectionEnd ?? at;
+        input.value = input.value.slice(0, at) + item.dataset.rrcEmoji + input.value.slice(end);
+        const pos = at + item.dataset.rrcEmoji.length;
+        input.setSelectionRange(pos, pos);
+        input.focus();
+        rrcEmojiCount(item.dataset.rrcEmoji);
+    });
+    document.addEventListener('mousedown', e => {
+        if (!emojis.hidden && e.target.isConnected && !e.target.closest('#rrc-emojis, #rrc-emoji-btn')) emojis.hidden = true;
+    });
+}

@@ -42,12 +42,27 @@ echo.
 %PY% rns_setup.py --iface tcp
 if errorlevel 1 echo The Reticulum config was not checked, see above.
 
+rem --- The app version: rBrowser in a window of its own (--app) ---
+echo.
+set "APPV="
+set "APP="
+set /p APPV="Also install the app version, rBrowser in a window of its own (rBrowser.py --app)? [y/N] "
+if /i "%APPV%"=="y" (
+    %PY% -m pip install -r requirements-app.txt
+    if errorlevel 1 (
+        echo The app version was not installed, see above. rBrowser works anyway, in the web browser.
+    ) else (
+        set "APP=yes"
+    )
+)
+
 :done
 echo.
 echo Done! Start rBrowser with:
 echo.
 echo   cd /d "%CD%"
 echo   %PY% rBrowser.py
+if defined APP echo   %PY% rBrowser.py --app      (in a window of its own)
 echo.
 echo Then open http://localhost:5000 in your browser.
 echo Only the NomadNet browser is on at first: switch on LXMF, RRC, BBS and RMAP in Settings when you want them.

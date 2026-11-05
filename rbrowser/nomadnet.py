@@ -820,7 +820,18 @@ class NomadNetFileBrowser:
                 self.main_browser.nomadnet_cached_links[self.destination_hash] = self.link
                 print(f"📁 Requesting file: {path}")
                 self.link.set_link_established_callback(self._on_link_established)
-            success = self.response_event.wait(timeout=timeout * 2)
+            # Given up only when nothing moves for that long, not after a
+            # fixed time: a big file over a slow path can take far longer
+            # than any timeout, and was cut off while still arriving.
+            idle = timeout * 2
+            self.last_activity = time.time()
+            success = False
+            while not self.cancelled:
+                if self.response_event.wait(timeout=1.0):
+                    success = True
+                    break
+                if time.time() - self.last_activity > idle:
+                    break
 
             if self.cancelled:
                 print(f"🛑 Download of {path.split('/')[-1] or 'file'} cancelled")
@@ -853,12 +864,12 @@ class NomadNetFileBrowser:
             filename = self.file_path.split('/')[-1] or "file"
             print(f"📁 Download of {filename} started")
             
-            # Define progress handler
+            # The fraction done (0.0 to 1.0) and the file's size, known once
+            # the node has announced the transfer (None before).
             def on_progress(receipt):
+                self.last_activity = time.time()
                 if self.progress_callback:
-                    progress = receipt.progress  # 0.0 to 1.0
-                    self.progress_callback(progress)
-                    # Removed: print statement here
+                    self.progress_callback(receipt.progress, getattr(receipt, "response_size", None))
             
             self.receipt = link.request(
                 self.file_path,

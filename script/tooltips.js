@@ -48,7 +48,7 @@ const TOOLTIPS = [
     ['[onclick="confirmRestart()"]', 'Restart the rBrowser server'],
     ['[onclick="lockAdvanced()"]', 'Hide the Advanced settings'],
     ['#setting-update-now', 'Look for a new version'],
-    ['#setting-auth-apply', 'Apply the password settings'],
+    ['#setting-auth-change', 'Set or change the access password'],
     ['#setting-ddns-apply', 'Apply the DDNS settings'],
     ['#setting-guest-apply', 'Apply the guest settings'],
     ['#setting-remote-copy', 'Copy the remote link'],

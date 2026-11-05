@@ -3,6 +3,42 @@
 What changes in each version. rBrowser reads this file from GitHub when an
 update is out, and shows the new entries in Settings > About.
 
+## 2.0.6b - 2026-11-05
+
+- Added app window mode (--app).
+- Added Autostart on boot.
+- Added desktop and menu shortcuts.
+- Added splash screen and logo.
+- Added download queue, speed and time left.
+- Added File Downloads settings.
+- Added RRC colours and effects.
+- Added RRC chat text size.
+- Added RRC emoji pages.
+- Added /unban and /unkline.
+- Added update button in top bar.
+- Added version in top bar.
+- Added running on addresses.
+- Added battery in status bar.
+- Added --info terminal view.
+- Added Change password popup.
+- Added FreeDNS domain option.
+- Added internet check interval.
+- Added RRC sound button.
+- Added Reload button in Settings.
+- Added open buttons for saved files.
+- Screenshots follow File Downloads.
+- Added flag emoji on Windows.
+- Added install guide PDFs.
+- Default RRC nick now on.
+- Improved short status bar.
+- Improved phone landscape layout.
+- Battery shows the device in use.
+- Fixed form fields named "name".
+- Fixed Docker LXMF start and downloads.
+- Fixed mobile address bar while typing.
+- Fixed RRC retries on a dead path.
+- Added hint for rnsd of another user.
+
 ## 2.0.5b - 2026-10-29
 
 - Added Custom address generator.

@@ -1188,7 +1188,7 @@ function toggleMessengerPeers(force) {
             if (!row) return;
             // A phone: the list covers the chat, which opened behind it
             // and nothing seemed to happen.
-            if (window.matchMedia('(max-width: 700px)').matches) toggleMessengerPeers(false);
+            if (window.matchMedia('(max-width: 700px), (pointer: coarse) and (max-height: 500px)').matches) toggleMessengerPeers(false);
             openMessenger(row.dataset.peerRow);
         });
         document.getElementById('msg-peers-items').addEventListener('contextmenu', e => {

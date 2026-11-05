@@ -49,6 +49,16 @@ RRC_IDENTITY_DIR = os.path.join("settings", "rrc_identities")    # more of them,
 APP_NAME, ASPECT = "rrc", "hub"
 
 K_V, K_T, K_ID, K_TS, K_SRC, K_ROOM, K_BODY, K_NICK, K_DST = range(9)
+# rBrowser's own key: colours and styles of a message, beside the plain text.
+# rrcd passes the whole envelope on as it is; other clients read only the
+# body and never see it. [[start, length, style], ...], in characters of
+# the body; style {"f": text colour 0-15, "b": background 0-15 (the mIRC
+# colours), "B"/"I"/"U": 1 for bold/italic/underline, "x": an effect,
+# "p": its pattern}.
+K_FMT = 64
+FMT_FX = ("rainbow", "fire", "ocean", "neon", "pastel", "matrix", "sunset", "candy",
+          "gold", "ice", "toxic", "aurora", "lava", "retro", "forest", "silver")
+FMT_PATTERNS = ("c", "w", "g")      # each letter, each word, a smooth gradient
 T_HELLO, T_WELCOME = 1, 2
 T_JOIN, T_JOINED, T_PART, T_PARTED = 10, 11, 12, 13
 T_MSG, T_NOTICE, T_ACTION = 20, 21, 22
@@ -69,6 +79,7 @@ PREFILL_DAYS = 7
 LINES_MAX = 1500                   # per room, this session only
 IDENTITY_WAIT = 30
 HELLO_TRIES = 5
+LINK_WAIT = 60                     # s: a link still pending by then is dropped and tried again
 RESOURCE_MAX = 256 * 1024
 RECONNECT_STEPS = (5, 15, 30, 60, 120)
 # A hub restarted without closing our link leaves it dead but "active" for
@@ -122,7 +133,7 @@ def cut_nick(value: Any, max_bytes: int = NICK_MAX) -> str:
 
 BOOL_SETTINGS = ("enabled", "show_joins", "reconnect", "autoconnect_all", "autoconnect_selected",
                  "nick_on",
-                 "rejoin_rooms", "compact_joins", "room_ts_desktop", "room_ts_mobile", "room_ts_short", "autoclose_nodes",
+                 "rejoin_rooms", "compact_joins", "show_colors", "room_ts_desktop", "room_ts_mobile", "room_ts_short", "autoclose_nodes",
                  "notices_to_hub", "show_auto",
                  "notify_mentions", "notify_messages", "notify_events", "autoreply_on", "echo_on", "away_notice",
                  "back_notice", "away_nick_on")
@@ -133,6 +144,7 @@ AUTOREPLY_TEXT_SETTINGS = ("autoreply_rules", "echo_text", "away_mode", "away_fr
 DEFAULT_BACK = "is back"
 DEFAULT_AWAY_NICK = "{nick}|Away"
 AWAY_NOTICE_HOURS = (0, 1, 2, 3, 4, 6, 8, 12, 24)     # 0 = once per away period
+FONT_SIZES = range(11, 25)                            # the chat text, px
 
 HELP = [
     "Commands of this client:",
@@ -144,6 +156,7 @@ HELP = [
     "  /joinall           into every room of the hub, one every 1.5 s",
     "  /rejoin [room]     leave the room (this one if none) and join it again",
     "  /help              this list              (also /j, /leave, /disconnect, /names)",
+    "  /unban [room] nick|hash   = /ban room del   /unkline nick|hash   = /kline del",
     "Everything else starting with / goes to the hub as it is, for example:",
     "  /list   /who room   /topic room [text]   /mode room +o nick",
     "  /op room nick   /voice room nick   /kick room nick   /ban room add nick",
@@ -167,6 +180,39 @@ def clean_text(value: Any, limit: int = 4000, multiline: bool = True) -> str:
     if not multiline:
         text = " ".join(text.split())
     return text[:limit]
+
+
+def clean_fmt(value: Any, length: int) -> Optional[List[List[Any]]]:
+    """The colours of a message (K_FMT), only what rBrowser knows, inside
+    the text; None if nothing is left."""
+    if not isinstance(value, (list, tuple)) or length <= 0:
+        return None
+    spans: List[List[Any]] = []
+    for item in list(value)[:64]:
+        if not isinstance(item, (list, tuple)) or len(item) != 3:
+            continue
+        start, size, style = item
+        if not isinstance(start, int) or not isinstance(size, int) or not isinstance(style, dict):
+            continue
+        start = max(0, start)
+        size = min(size, length - start)
+        if size <= 0:
+            continue
+        out: Dict[str, Any] = {}
+        for key in ("f", "b"):
+            if isinstance(style.get(key), int) and 0 <= style[key] <= 15:
+                out[key] = style[key]
+        for key in ("B", "I", "U"):
+            if style.get(key) in (1, True):
+                out[key] = 1
+        # An effect of a newer rBrowser kept by its name: the page draws one it
+        # does not know as a rainbow (rrcFxHtml), not as no effect at all.
+        if style.get("x") in FMT_FX or (isinstance(style.get("x"), str) and re.fullmatch(r"[a-z]{1,16}", style["x"])):
+            out["x"] = style["x"]
+            out["p"] = style.get("p") if style.get("p") in FMT_PATTERNS else "c"
+        if out:
+            spans.append([start, size, out])
+    return spans or None
 
 
 def clean_address(value: Any) -> Optional[str]:
@@ -232,7 +278,7 @@ def hub_name(app_data: Optional[bytes]) -> Optional[str]:
 
 
 def envelope(msg_type: int, src: bytes, room: Optional[str] = None, body: Any = None,
-             nick: Optional[str] = None) -> Dict[int, Any]:
+             nick: Optional[str] = None, fmt: Optional[List[List[Any]]] = None) -> Dict[int, Any]:
     env: Dict[int, Any] = {K_V: RRC_VERSION, K_T: msg_type, K_ID: os.urandom(8),
                            K_TS: int(time.time() * 1000), K_SRC: src}
     if room is not None:
@@ -241,6 +287,8 @@ def envelope(msg_type: int, src: bytes, room: Optional[str] = None, body: Any = 
         env[K_BODY] = body
     if nick:
         env[K_NICK] = nick
+    if fmt:
+        env[K_FMT] = fmt
     return env
 
 
@@ -285,6 +333,7 @@ class Hub:
         self.notice_at = 0.0                # last NOTICE from the hub (MOTD still coming?)
         self.manual = False                 # closed by us: no reconnecting
         self.reconnects = 0
+        self.bad_path = False               # last link never opened: ask for a new path first
         self.rtt: Optional[float] = None
         self.receiving = False
         self.rooms: Dict[str, Room] = {STATUS: Room(STATUS)}
@@ -361,9 +410,10 @@ class RRC:
         "enabled": False,
         "identity": RRC_ID,
         # Default nick: used on the hubs where you chose none, only when
-        # nick_on. Off: those hubs see your identity hash only.
-        "nick": "Anonymous Peer",
-        "nick_on": False,
+        # nick_on. Off: those hubs see your identity hash only. On at first:
+        # a hash alone in the people list says nothing to the others.
+        "nick": "Anonymous Peer rB2",
+        "nick_on": True,
         "show_joins": True,
         # Every hub notice in the hub tab, the rooms keep only the chat (and
         # their own topic and modes, which belong to the room).
@@ -379,6 +429,8 @@ class RRC:
         "autoconnect_selected": True,
         "rejoin_rooms": True,            # on connect, the rooms you were in last time
         "compact_joins": False,
+        "show_colors": True,           # the colours other rBrowsers give their messages (K_FMT)
+        "font_size": 13,               # the chat text in px, larger for who reads badly
         # The time before each line in the room windows (the hub tab always
         # shows it in full, for the drops and modes): on or off on a computer
         # and on a phone, and on a computer short (hh:mm) as on a phone.
@@ -461,6 +513,9 @@ class RRC:
                 # was always used: it stays on for whoever had one.
                 if "nick_on" not in stored:
                     self.settings["nick_on"] = bool(str(stored.get("nick") or "").strip())
+                # The old default nick, never changed: the new one.
+                if stored.get("nick") == "Anonymous Peer":
+                    self.settings["nick"] = self.DEFAULTS["nick"]
         except FileNotFoundError:
             pass
         except (OSError, ValueError) as exc:
@@ -495,6 +550,11 @@ class RRC:
             every = 0
         # Not more often than once an hour: the rooms are not ours to fill.
         s["away_notice_every"] = every if every in AWAY_NOTICE_HOURS else 0
+        try:
+            size = int(s.get("font_size") or 13)
+        except (TypeError, ValueError):
+            size = 13
+        s["font_size"] = size if size in FONT_SIZES else 13
         s["autoreply_scope"] = "selected" if s.get("autoreply_scope") == "selected" else "all"
         chosen = s.get("autoreply_rooms") if isinstance(s.get("autoreply_rooms"), list) else []
         s["autoreply_rooms"] = sorted({c for c in chosen if isinstance(c, str)
@@ -547,6 +607,8 @@ class RRC:
                 self.settings["nick"] = str(incoming["nick"] or "")
             if "highlight" in incoming:
                 self.settings["highlight"] = str(incoming["highlight"] or "")
+            if "font_size" in incoming:
+                self.settings["font_size"] = incoming["font_size"]     # checked in _repair
             # Away switched on now: a new period, everybody is told once again.
             if incoming.get("away_mode") == "on" and self.settings.get("away_mode") != "on":
                 self.settings["away_since"] = time.time()
@@ -965,16 +1027,19 @@ class RRC:
     # ------------------------------------------------------------------ lines
 
     def _line(self, hub: Hub, room: str, kind: str, text: str, nick: str = "", src: str = "",
-              mention: bool = False, count: bool = False) -> None:
+              mention: bool = False, count: bool = False, fmt: Optional[List[List[Any]]] = None) -> None:
         """Adds a line to a window. count: a message that makes the room "new"."""
         with self.lock:
             # Windows are made by join() only: a line for a room closed goes
             # to the hub window, never brings back a ghost window.
             r = hub.rooms.get(room) or hub.rooms[STATUS]
             hub.seq += 1
-            r.lines.append({"seq": hub.seq, "ts": time.time(), "room": r.name, "kind": kind,
-                            "text": clean_text(text), "nick": clean_text(nick, 64, multiline=False),
-                            "src": src, "mention": mention})
+            line = {"seq": hub.seq, "ts": time.time(), "room": r.name, "kind": kind,
+                    "text": clean_text(text), "nick": clean_text(nick, 64, multiline=False),
+                    "src": src, "mention": mention}
+            if fmt:
+                line["fmt"] = fmt
+            r.lines.append(line)
             if count:
                 r.unread += 1
                 if mention:
@@ -1066,6 +1131,10 @@ class RRC:
     def _connect_job(self, hub: Hub, our_identity: Any) -> None:
         dest_hash = bytes.fromhex(hub.address)
         try:
+            if hub.bad_path:
+                hub.bad_path = False
+                self._sys(hub, "Dropping the old path…")
+                self._drop_path(dest_hash)
             if not RNS.Transport.has_path(dest_hash):
                 self._sys(hub, "Asking the network for a path…")
                 RNS.Transport.request_path(dest_hash)
@@ -1075,14 +1144,15 @@ class RRC:
             identity = RNS.Identity.recall(dest_hash)
             if hub.state != "connecting":
                 return
-            if identity is None:
+            if identity is None or not RNS.Transport.has_path(dest_hash):
+                # Without a path RNS would wait up to ~13 min for the link.
                 return self._fail(hub, "No answer: the hub is not reachable now")
             destination = RNS.Destination(identity, RNS.Destination.OUT, RNS.Destination.SINGLE, APP_NAME, ASPECT)
             if destination.hash != dest_hash:
                 hub.manual = True
                 return self._fail(hub, "This address is not an RRC hub")
             hub.hub_hash = identity.hash
-            hops = RNS.Transport.hops_to(dest_hash) if RNS.Transport.has_path(dest_hash) else "?"
+            hops = RNS.Transport.hops_to(dest_hash)
             self._sys(hub, f"Opening a link ({hops} hops)…")
 
             def established(link: Any) -> None:
@@ -1115,8 +1185,37 @@ class RRC:
             link.set_resource_strategy(RNS.Link.ACCEPT_APP)
             link.set_resource_callback(lambda res: self._resource_ok(hub, res))
             link.set_resource_concluded_callback(lambda res: self._resource_done(hub, res))
+            threading.Thread(target=self._pending_watch, args=(hub, link),
+                             name="rrc-pending", daemon=True).start()
         except Exception as exc:
             self._fail(hub, f"Could not connect: {exc}")
+
+    @staticmethod
+    def _drop_path(dest_hash: bytes) -> None:
+        """Forget a path in rnsd and here, so the next request finds a new one."""
+        try:
+            RNS.Reticulum.get_instance().drop_path(dest_hash)
+        except Exception:
+            pass
+        try:
+            with RNS.Transport.path_table_lock:
+                RNS.Transport.path_table.pop(dest_hash, None)
+        except Exception:
+            pass
+        time.sleep(1.0)  # rnsd cleans its table within a second
+
+    @staticmethod
+    def _pending_watch(hub: Hub, link: Any) -> None:
+        deadline = time.time() + LINK_WAIT
+        while time.time() < deadline:
+            if hub.link is not link or hub.link_up:
+                return
+            time.sleep(1)
+        if hub.link is link and not hub.link_up and link.status == RNS.Link.PENDING:
+            try:
+                link.teardown()
+            except Exception:
+                pass
 
     def _hello_loop(self, hub: Hub, link: Any, our_identity: Any) -> None:
         body = {0: CLIENT_NAME, 1: CLIENT_VERSION, 2: {CAP_RESOURCE_ENVELOPE: True, CAP_ACTION: True}}
@@ -1156,6 +1255,7 @@ class RRC:
         hub.reset_session()
         if was == "connecting":
             hub.state = "failed"
+            hub.bad_path = not link_up
             hub.error = hub.error or self._why_not(link_up, reason)
             self._line(hub, STATUS, "error", hub.error)
         elif was == "connected":
@@ -1447,10 +1547,11 @@ class RRC:
         hub.pings[body] = (time.time(), room)
         self._send(hub, envelope(T_PING, self._me(hub), body=body))
 
-    def input(self, address: Any, room: Any, text: Any, split: bool = False) -> Dict[str, Any]:
+    def input(self, address: Any, room: Any, text: Any, split: bool = False, fmt: Any = None) -> Dict[str, Any]:
         """A line typed in a window: a message, or a command. A message over
         the hub's limit is refused with too_long (the page asks), or with
-        split sent in parts "(1/3) ...", as NomadNet does."""
+        split sent in parts "(1/3) ...", as NomadNet does. fmt: its colours
+        (K_FMT); a message in parts keeps them only if they cover it all."""
         hub = self.sessions.get(clean_address(address) or "")
         if hub is None:
             return {"status": "error", "error": "Not connected to this hub"}
@@ -1470,15 +1571,18 @@ class RRC:
                 if not split:
                     return {"status": "error", "too_long": True, "parts": len(parts), "max": hub.max_msg,
                             "error": f"Too long: the hub takes {hub.max_msg} bytes at most"}
+                spans = clean_fmt(fmt, len(text))
+                whole = spans[0][2] if spans and len(spans) == 1 and spans[0][:2] == [0, len(text)] else None
                 for part in parts:
-                    self._say(hub, room, T_MSG, part)
+                    self._say(hub, room, T_MSG, part, [[0, len(part), whole]] if whole else None)
                 return {"status": "success"}
-            return self._say(hub, room, T_MSG, text)
+            return self._say(hub, room, T_MSG, text, clean_fmt(fmt, len(text)))
         except Exception as exc:
             self._line(hub, room, "error", str(exc))
             return {"status": "error", "error": str(exc)}
 
-    def _say(self, hub: Hub, room: str, kind: int, text: str) -> Dict[str, Any]:
+    def _say(self, hub: Hub, room: str, kind: int, text: str,
+             fmt: Optional[List[List[Any]]] = None) -> Dict[str, Any]:
         if not hub.welcomed:
             raise RuntimeError("Not connected")
         if not room:
@@ -1487,21 +1591,21 @@ class RRC:
             if room in hub.pending_joins:           # the hub has not answered the JOIN yet
                 if len(text.encode("utf-8")) > hub.max_msg:
                     raise RuntimeError(f"Too long: the hub takes {hub.max_msg} bytes at most")
-                hub.rooms[room].outbox.append((kind, text))
+                hub.rooms[room].outbox.append((kind, text, fmt))
                 self._sys(hub, "Not in yet: sent as soon as the hub lets you in", room)
                 return {"status": "success", "queued": True}
             raise RuntimeError(f"You are not in #{room}: /join {room}")
         if len(text.encode("utf-8")) > hub.max_msg:
             raise RuntimeError(f"Too long: the hub takes {hub.max_msg} bytes at most")
         nick = self.nick_for(hub.address)
-        env = envelope(kind, self._me(hub), room=room, body=text, nick=nick)
+        env = envelope(kind, self._me(hub), room=room, body=text, nick=nick, fmt=fmt)
         if nick:
             with self.lock:
                 hub.nicks[self._me(hub).hex()] = clean_text(nick, 64, multiline=False)
         self._send(hub, env)
         hub.sent_ids.append(env[K_ID])
         me = self._me(hub).hex()
-        self._line(hub, room, "msg" if kind == T_MSG else "action", text, nick or me[:12], me)
+        self._line(hub, room, "msg" if kind == T_MSG else "action", text, nick or me[:12], me, fmt=fmt)
         return {"status": "success"}
 
     def _notice_all(self, hub: Hub, text: str, only: str = "") -> Dict[str, Any]:
@@ -1601,6 +1705,16 @@ class RRC:
         threading.Thread(target=go, name="rrc-joinall", daemon=True).start()
         return {"status": "success"}
 
+    def _hash_of_nick(self, hub: Hub, nick: str) -> str:
+        """The full hash of one we know by this nick (one match only), "" if
+        none or if it is a hash already."""
+        nick = nick.strip().lstrip("@").lower()
+        if not nick or re.fullmatch(r"[0-9a-f]{6,32}", nick):
+            return ""
+        with self.lock:
+            hits = {h for h, n in hub.nicks.items() if len(h) == 32 and n.lower() == nick}
+        return hits.pop() if len(hits) == 1 else ""
+
     def _command(self, hub: Hub, room: str, line: str) -> Dict[str, Any]:
         word, _, arg = line[1:].partition(" ")
         word, arg = word.lower(), arg.strip()
@@ -1652,6 +1766,22 @@ class RRC:
             if not room:
                 raise RuntimeError("This is the hub window: /notice goes to a room (or /noticeall)")
             return self._notice_all(hub, arg, only=room)
+        # rrcd has only "/ban room del" and "/kline del": the usual IRC names for them.
+        # A nick can have spaces ("X IAN X") and rrcd splits on them, so the
+        # nick goes as its hash (also when they are gone, as rrcd needs).
+        if word == "unban":
+            first, _, rest = arg.partition(" ")
+            if rest and not self._hash_of_nick(hub, arg) and (first.startswith("#") or clean_room(first) in hub.rooms):
+                where, who = clean_room(first), rest.strip()
+            else:
+                where, who = room, arg
+            if not where or not who:
+                raise RuntimeError("/unban [room] nick|hash")
+            word, line = "ban", f"/ban {where} del {self._hash_of_nick(hub, who) or who}"
+        elif word == "unkline":
+            if not arg:
+                raise RuntimeError("/unkline nick|hash")
+            word, line = "kline", f"/kline del {self._hash_of_nick(hub, arg) or arg}"
         # Anything else is the hub's: sent as it is.
         if word in ("who", "names"):
             target = clean_room(arg) if arg else room
@@ -1748,7 +1878,8 @@ class RRC:
                 return
             mention = src != me and self._mentions(hub, body)
             self._line(hub, room, "msg" if t == T_MSG else "action", body,
-                       nick or hub.name_of(src), src, mention, count=True)
+                       nick or hub.name_of(src), src, mention, count=True,
+                       fmt=clean_fmt(env.get(K_FMT), len(clean_text(body))))
             if mention:
                 self._maybe_autoreply(hub, room, src, nick or hub.name_of(src), body)
             return
@@ -1863,9 +1994,9 @@ class RRC:
             self._sys(hub, f"You joined #{room}", room)
             self._quiet_who(hub, room)              # the nicks: JOINED brings only hashes
             waiting, r.outbox = r.outbox, []
-            for kind, text in waiting:              # typed while the JOIN was on its way
+            for kind, text, fmt in waiting:         # typed while the JOIN was on its way
                 try:
-                    self._say(hub, room, kind, text)
+                    self._say(hub, room, kind, text, fmt)
                 except Exception as exc:
                     self._line(hub, room, "error", str(exc))
         else:

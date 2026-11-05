@@ -558,7 +558,7 @@ function renderRmapLists() {
         const opts = shown.map(g => `<option value="${g.key}"${g.key === Rmap.pick ? ' selected' : ''}>${escapeHtml(g.label)} (${count(g)})</option>`).join('');
         if (pick.dataset.html !== opts) { pick.dataset.html = opts; pick.innerHTML = opts; }
     }
-    if (window.matchMedia('(max-width: 700px)').matches) shown = shown.filter(g => g.key === Rmap.pick);
+    if (window.matchMedia('(max-width: 700px), (pointer: coarse) and (max-height: 500px)').matches) shown = shown.filter(g => g.key === Rmap.pick);
     const html = shown.map(g => {
         const list = (Rmap.data.nodes || []).filter(n => n.groups.includes(g.key) && match(n));
         const rows = list.slice(0, RMAP_LIST_MAX).map(n => rmapRow(n, g.key, now)).join('');

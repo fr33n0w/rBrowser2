@@ -1129,6 +1129,49 @@ body.sb-bottom .shortcuts-bar {
     margin-left: auto;
 }
 
+/* A new version not installed yet: thin, as tall as the bar's text. */
+.status-bar .sb-update {
+    flex: none;
+    height: 18px;
+    padding: 0 8px;
+    border: 1px solid #f0883e;
+    border-radius: 9px;
+    background: #f0883e2e;
+    color: #ffa657;
+    font: inherit;
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+    animation: sb-update-pulse 2s ease-in-out infinite;
+}
+
+.status-bar .sb-update:hover {
+    background: #f0883e55;
+    animation: none;
+}
+
+/* Something to look at: it breathes, gently. */
+@keyframes sb-update-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 #f0883e00; }
+    50% { box-shadow: 0 0 0 3px #f0883e55; background: #f0883e4d; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .status-bar .sb-update {
+        animation: none;
+    }
+}
+
+.status-bar .sb-update[hidden] {
+    display: none;
+}
+
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
+    .status-bar .sb-update {
+        padding: 0 6px;
+    }
+}
+
 /* A long Reticulum error is cut with "..." (the whole of it in the bar's
    tooltip): the icons, CPU/RAM and the clock always stay in sight. */
 .status-bar .status-indicator {
@@ -1139,6 +1182,25 @@ body.sb-bottom .shortcuts-bar {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.status-bar .sb-version {
+    color: #8b949e;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.status-bar .sb-version {
+    text-decoration: none;
+}
+
+.status-bar .sb-version:hover {
+    color: #58a6ff;
+    text-decoration: underline;
+}
+
+.status-bar .sb-version:empty {
+    display: none;
 }
 
 .status-bar .sb-clock {
@@ -1265,7 +1327,7 @@ body.mobile-device .status-bar .sb-status-label {
 
 /* Mobile: "Announces: N · NomadNet: N", the long labels ran under the node list. */
 .status-bar .sb-short { display: none; }
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .status-bar .sb-long { display: none; }
     .status-bar .sb-short { display: inline; }
 }
@@ -1888,7 +1950,7 @@ body.center-pages .page-content:has(> .error) {
     white-space: normal !important;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .error {
         margin: 16px 8px;
         padding: 14px;
@@ -2397,7 +2459,7 @@ body.center-pages .page-content:has(> .error) {
 }
 
 /* Small laptops and tablets landscape (768px - 1199px) */
-@media (min-width: 768px) and (max-width: 1199px) {
+@media (min-width: 768px) and (max-width: 1199px) and (pointer: fine), (min-width: 768px) and (max-width: 1199px) and (min-height: 501px) {
     .sidebar {
         width: 260px;
         min-width: 260px;
@@ -2436,7 +2498,7 @@ body.center-pages .page-content:has(> .error) {
    ============================================ */
 
 /* Tablets portrait and large phones (481px - 767px) */
-@media (min-width: 481px) and (max-width: 767px) {
+@media (min-width: 481px) and (max-width: 767px), (min-width: 481px) and (pointer: coarse) and (max-height: 500px) {
     body {
         overflow: hidden;
     }
@@ -2842,7 +2904,7 @@ body.center-pages .page-content:has(> .error) {
 }
 
 /* Ubuntu Touch / Morph Browser specific fixes */
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     /* Force proper viewport handling */
     html {
         position: fixed !important;
@@ -2908,7 +2970,7 @@ body.center-pages .page-content:has(> .error) {
     }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     body {
         overflow: hidden;
         margin: 0;
@@ -3389,7 +3451,7 @@ body.center-pages .page-content:has(> .error) {
     --sidebar-w: 210px;
 }
 
-@media (min-width: 768px) {
+@media (min-width: 768px) and (pointer: fine), (min-width: 768px) and (min-height: 501px) {
     .sidebar {
         width: var(--sidebar-w) !important;
         min-width: var(--sidebar-w) !important;
@@ -3483,7 +3545,7 @@ body.sidebar-resizing * {
     cursor: col-resize !important;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .sidebar-resizer {
         display: none !important;
     }
@@ -3500,7 +3562,7 @@ body.sidebar-resizing * {
     flex-shrink: 0;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .sidebar-toggle-btn {
         display: none !important;
     }
@@ -3768,7 +3830,7 @@ body.center-pages .page-content {
    page fills a phone anyway. It is the opposite: a phone is narrower than
    any Micron page is written for, so this is exactly where scaling matters
    most - it was the one control that should never have been hidden here. */
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .zoom-control {
         display: flex !important;
     }
@@ -3814,7 +3876,7 @@ body.center-pages .page-content {
     color-scheme: dark;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     /* Back and forward were collateral damage. Three separate rules hid
        .nav-controls wholesale on narrow screens to make room in the bar,
        taking the history buttons with them - on a phone, where swiping back
@@ -3935,7 +3997,7 @@ body.center-pages .page-content {
    wraps inside the box, as NomadNet wraps it at the terminal edge; on a
    page with prose the box is at least 100 columns, so a short heading does
    not squeeze the text into a strip. +12px: padding and border. */
-@media (min-width: 768px) {
+@media (min-width: 768px) and (pointer: fine), (min-width: 768px) and (min-height: 501px) {
     body.center-pages .page-content {
         width: min(100%, calc(var(--layout-w, 100%) + 12px));
         /* Layout lines never wrap here, only prose does - as on a phone.
@@ -3960,7 +4022,7 @@ body.center-pages .page-content {
     }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     /* As wide as the widest layout line (--layout-w, measured by
        measureLayoutWidth in rbrowser.js) or the screen, whichever is wider.
        Not max-content: that grew the box to the longest paragraph, so prose
@@ -4270,6 +4332,7 @@ body.screenshots-off .fullscreen-shot {
     font-size: 11px;
     line-height: 1.5;
     margin-bottom: 10px;
+    overflow-wrap: anywhere;
 }
 
 .settings-warning {
@@ -4307,6 +4370,24 @@ body.screenshots-off .fullscreen-shot {
     cursor: default;
     -webkit-user-select: none;
     user-select: none;
+}
+
+/* "rBrowser2 running on": System Setup and About. */
+.settings-running-on {
+    margin: 4px 0 6px;
+    font-size: 12.5px;
+    color: #e6edf3;
+    overflow-wrap: anywhere;
+}
+
+.settings-running-on > div + div {
+    margin-top: 3px;
+}
+
+.settings-running-label {
+    display: inline-block;
+    min-width: 110px;
+    color: #8b949e;
 }
 
 #settings-messenger-section code {
@@ -4922,7 +5003,7 @@ body.screenshots-off .fullscreen-shot {
     display: none;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .source-pill .pill-text {
         display: none;
     }
@@ -5109,7 +5190,7 @@ mark.search-hit {
     line-height: 1.5;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .settings-dialog {
         min-width: 0;
         width: 94vw;
@@ -5247,7 +5328,7 @@ mark.search-hit {
    - the tab strip scrolled vertically too, showing a scrollbar.
    ============================================ */
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .tab-bar,
     #tabs-container {
         overflow-y: hidden !important;
@@ -5307,7 +5388,7 @@ mark.search-hit {
    drop onto the address row. Here they share the row evenly instead
    (about 27-30px each, the icon stays 16px). display: contents lets the
    back/forward/reload/home group take part in that sharing. */
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .nav-bar {
         flex-wrap: wrap !important;
         row-gap: 6px !important;
@@ -5443,7 +5524,7 @@ mark.search-hit {
    mobile rule on tabs had stretched it to about 70px - and the button
    that hides the sidebar is gone: on a phone the node list is opened
    with the Nodes button instead. */
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .tab-content .header .header-buttons {
         flex-wrap: nowrap !important;
         gap: 4px !important;
@@ -5591,7 +5672,7 @@ mark.search-hit {
 /* Phones: the tab strip was 52px with tabs about 48px tall - a lot of a
    small screen for a row of titles. 38px now, tabs and the Nodes button
    32px. */
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .tab-bar {
         height: 38px !important;
         min-height: 38px !important;
@@ -5666,7 +5747,7 @@ mark.search-hit {
 /* Phones, Messenger: inside a chat the bar above (identity, New, Contact,
    Peers, Announce, Sync) took 157 of 740px; the chat's own head has
    the back arrow, so the bar waits for the list. */
-@media (max-width: 700px) {
+@media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
     .messenger-view:has(.msg-body.chat-open) > .msg-bar {
         display: none !important;
     }
@@ -5700,7 +5781,7 @@ mark.search-hit {
 /* Phones: a slimmer address bar - 32px and 13px text instead of 44px and
    16px. (On iPhone Safari a field under 16px zooms the page when tapped;
    Android does not.) */
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .nav-bar > .address-bar {
         height: 32px !important;
         min-height: 32px !important;
@@ -5713,7 +5794,7 @@ mark.search-hit {
 
 /* Phones: form fields do not scale with the page zoom, so a 48-column
    field could be wider than the screen. Capped at the page width. */
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .page-content input[type="text"],
     .page-content input[type="password"],
     .page-content input:not([type]),
@@ -5734,8 +5815,10 @@ mark.search-hit {
    address bar already shows it).
    Selectors repeat html.mobile-device: the touch layout's own rules carry
    !important at that specificity.
+   min-width: a phone upright with the keyboard open is also under 500px
+   tall, and this one-row nav bar squeezed its address bar to nothing.
    ============================================ */
-@media (max-height: 500px) {
+@media (max-height: 500px) and (min-width: 560px) {
     .tab-bar, html.mobile-device .tab-bar {
         height: 34px !important;
         min-height: 34px !important;
@@ -5867,19 +5950,101 @@ html, body, .page-content {
     text-size-adjust: 100%;
 }
 
-/* File download progress box. Was styled inline at a fixed 320px, 60px
-   from the edge, which put half of it off a phone screen. */
-.download-box {
+/* Settings > File Downloads: the files rBrowser has, a row each. */
+.files-folder-row { flex-wrap: wrap; gap: 6px; }
+.files-folder-row input { flex: 1 1 320px; min-width: 0; width: auto; }
+.files-buttons { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+.files-buttons .settings-export { margin: 0; }
+.files-list { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 10px; font-size: 13px; }
+.files-empty { color: #7d8590; font-size: 12px; }
+.files-item { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 8px 10px; }
+.files-name { color: #e6edf3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-meta { color: #7d8590; font-size: 12px; margin: 2px 0 6px; }
+.files-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.files-actions button, .files-actions a {
+    background: #21262d; border: 1px solid #30363d; border-radius: 4px; color: #c9d1d9;
+    font-size: 12px; padding: 2px 8px; cursor: pointer; text-decoration: none;
+}
+.files-actions button:hover, .files-actions a:hover { border-color: #58a6ff; color: #e6edf3; }
+.files-actions .files-delete:hover { border-color: #f85149; color: #ff7b72; }
+
+/* File downloads (rbrowser.js handleFileDownload): one panel at the bottom
+   right, a row per file, scrolling when there are many. On a phone it
+   spans the width. */
+.download-list {
     position: fixed; bottom: 60px; right: 60px; z-index: 10000;
-    width: 340px; max-width: calc(100vw - 32px); box-sizing: border-box;
+    width: 360px; max-width: calc(100vw - 32px);
+    display: flex; flex-direction: column; gap: 8px;
+}
+.download-list .dl-rows {
+    display: flex; flex-direction: column; gap: 8px;
+    max-height: 60vh; overflow-y: auto; scrollbar-width: thin;
+}
+.download-list .dl-panel-head {
+    display: flex; align-items: center; gap: 10px; align-self: flex-end;
+    background: #161b22; border: 1px solid #30363d; color: #e6edf3;
+    padding: 4px 6px 4px 12px; font-size: 13px; font-weight: 600;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+.download-list .dl-min,
+.download-list .dl-cancel-all {
+    background: none; border: none; color: #7d8590; cursor: pointer;
+    font-size: 18px; line-height: 1; padding: 0 6px;
+}
+.download-list .dl-min:hover { color: #e6edf3; }
+.download-list .dl-cancel-all:hover { color: #ff7b72; }
+/* Reduced: only the head, a small line with the overall progress and the
+   x that cancels them all (open, each row has its own). */
+.download-list .dl-cancel-all,
+.download-list.dl-minimized .dl-rows,
+.download-list.dl-minimized .dl-min { display: none; }
+.download-list.dl-minimized .dl-cancel-all { display: inline; }
+.download-list.dl-minimized .dl-panel-head { cursor: pointer; padding: 4px 6px 4px 12px; }
+.download-list.dl-minimized .dl-panel-head:hover { border-color: #58a6ff; }
+.download-box {
+    box-sizing: border-box;
     background: #1a1a1a; border: 3px solid #333333; color: #ffffff;
-    padding: 16px 20px; font-size: 14px;
+    padding: 12px 16px; font-size: 14px;
     box-shadow: 0 4px 20px rgba(0,0,0,0.5);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     overflow-wrap: anywhere;
 }
-@media (max-width: 768px) {
-    .download-box { left: 16px; right: 16px; bottom: 16px; width: auto; max-width: none; padding: 12px 14px; }
+.download-box .dl-head { display: flex; align-items: flex-start; gap: 10px; }
+.download-box .dl-title { flex: 1; }
+.download-box .dl-from { font-size: 12px; color: #7d8590; margin-top: 2px; }
+.download-box .dl-close {
+    background: none; border: none; color: #7d8590; cursor: pointer;
+    font-size: 18px; line-height: 1; padding: 0 2px;
+}
+.download-box .dl-close:hover { color: #e6edf3; }
+.download-box .dl-track { margin: 8px 0; background: #333; height: 6px; border-radius: 3px; overflow: hidden; }
+.download-box .dl-bar { background: #58a6ff; height: 100%; width: 0%; transition: width 0.3s; }
+.download-box .dl-text { font-size: 12px; color: #7d8590; }
+/* Saved in the download folder: a small button like the reduced panel. */
+.download-box.dl-saved {
+    display: flex; align-items: center; gap: 4px; align-self: flex-end; max-width: 100%;
+    background: #161b22; border: 1px solid #30363d; padding: 4px 6px 4px 8px; font-size: 13px;
+}
+.download-box.dl-saved:hover { border-color: #58a6ff; }
+.download-list.dl-only-saved .dl-panel-head { display: none; }
+.download-list.dl-only-saved.dl-minimized .dl-rows { display: flex; }
+.dl-saved button {
+    background: none; border: none; color: #7d8590; cursor: pointer;
+    font: inherit; line-height: 1; padding: 2px 4px;
+}
+.dl-saved .dl-saved-open {
+    color: #e6edf3; font-weight: 600; display: flex; gap: 6px; min-width: 0;
+}
+.dl-saved .dl-saved-open span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dl-saved .dl-saved-open:hover span { text-decoration: underline; }
+.dl-saved .dl-saved-folder { font-size: 15px; }
+.dl-saved .dl-saved-close { font-size: 18px; }
+.dl-saved .dl-saved-folder:hover { color: #e6edf3; }
+.dl-saved .dl-saved-close:hover { color: #ff7b72; }
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+    .download-list { left: 16px; right: 16px; bottom: 16px; width: auto; max-width: none; }
+    .download-box { padding: 10px 12px; }
 }
 
 /* Full screen page view (Full button / togglePageFullscreen): everything
@@ -6522,7 +6687,7 @@ body.page-fullscreen .content {
     font-size: 12px;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .omnibox-kind {
         display: none;
     }
@@ -7340,7 +7505,7 @@ body.rrc-open .content {
     align-items: flex-end;
 }
 
-@media (max-width: 700px) {
+@media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
     .retibbs-view.active {
         flex-direction: column;
     }
@@ -7457,7 +7622,7 @@ body.rrc-open .content {
 
 /* Phones: the app tabs are only icons, managed from Settings; page tabs
    keep the dot and the title, no room for the icon. */
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .app-tab-off,
     .page-tab-icon {
         display: none;
@@ -7678,7 +7843,7 @@ body.rrc-open .content {
    the bar's head kept 300px for itself and left the buttons ~100px, one
    under the other. Below 760px it goes on top, the buttons under it at full
    width - as on a phone. */
-@media (min-width: 701px) {
+@media (min-width: 701px) and (pointer: fine), (min-width: 701px) and (min-height: 501px) {
     .messenger-view {
         container: msgview / inline-size;
     }
@@ -7699,7 +7864,7 @@ body.rrc-open .content {
    address, then only the dot and an icon; a click still opens the menu and
    the tooltip says who you write as. Phones put the badge on a row of its
    own (below), so not there. */
-@media (min-width: 768px) {
+@media (min-width: 768px) and (pointer: fine), (min-width: 768px) and (min-height: 501px) {
     .msg-bar-main {
         container: msgbar / inline-size;
     }
@@ -9550,7 +9715,7 @@ body.rrc-open .content {
 }
 
 /* Phones: the list or the chat, one at a time. */
-@media (max-width: 700px) {
+@media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
     .msg-list {
         width: 100%;
         border-right: none;
@@ -9821,7 +9986,7 @@ body.sidebar-collapsed .sidebar-toggle-btn {
     margin-bottom: 4px;
 }
 
-@media (max-width: 700px) {
+@media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
     .msg-info-row {
         grid-template-columns: 1fr;
         gap: 2px;
@@ -9989,8 +10154,15 @@ body.sidebar-collapsed .sidebar-toggle-btn {
     transition: background .15s, border-color .15s, color .15s;
 }
 
+.settings-power-btn.reload svg { color: #58a6ff; }
 .settings-power-btn.restart svg { color: #d29922; }
 .settings-power-btn.shutdown svg { color: #f85149; }
+
+.settings-power-btn.reload:hover {
+    background: rgba(88, 166, 255, 0.12);
+    border-color: rgba(88, 166, 255, 0.6);
+    color: #79c0ff;
+}
 
 .settings-power-btn.restart:hover {
     background: rgba(210, 153, 34, 0.12);
@@ -10128,7 +10300,7 @@ body.sidebar-collapsed .sidebar-toggle-btn {
     cursor: not-allowed;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .settings-v2 {
         width: 100vw;
         height: 100dvh;
@@ -10562,7 +10734,7 @@ body.sidebar-collapsed .sidebar-toggle-btn {
 
 /* Phones: one column, the one picked, as wide as the screen (side by side
    they ran out of the screen). */
-@media (max-width: 700px) {
+@media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
     .rmap-pick {
         display: block;
         flex: none;
@@ -10756,6 +10928,11 @@ body.sidebar-collapsed .sidebar-toggle-btn {
     font-weight: 700;
 }
 
+/* ...but one with its own style as the others see it, its bold included. */
+.rrc-line.rrc-own .rrc-text .rrc-fmt {
+    font-weight: 400;
+}
+
 /* @ and + before a nick, as in mIRC. */
 .rrc-user-sign {
     display: inline-block;
@@ -10811,7 +10988,7 @@ body.sidebar-collapsed .sidebar-toggle-btn {
 
 /* Phones: nick, identity and hash on one line; the hash gives way (a click
    still copies it whole). */
-@media (max-width: 700px) {
+@media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
     .rrc-me-head .rrc-me-hash {
         display: inline-block;
         max-width: 80px;
@@ -11187,7 +11364,7 @@ body.sidebar-collapsed .sidebar-toggle-btn {
     display: inline-flex;
 }
 
-@media (max-width: 700px) {
+@media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
     .rrc-head {
         flex-wrap: wrap;
     }
@@ -11204,6 +11381,34 @@ body.sidebar-collapsed .sidebar-toggle-btn {
     .rrc-legend-row {
         grid-template-columns: 1fr;
         gap: 2px;
+    }
+}
+
+/* Phone on its side: name and buttons on one row, the room to the chat. */
+@media (pointer: coarse) and (max-height: 500px) and (min-width: 560px) {
+    .rrc-head {
+        flex-wrap: nowrap;
+        padding-top: 4px;
+        padding-bottom: 4px;
+    }
+
+    .rrc-head-left {
+        flex: 1 1 0;
+        min-width: 0;
+    }
+
+    .rrc-head-left > * {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .rrc-head-right {
+        width: auto;
+    }
+
+    .rrc-head-right .bbs-head-actions {
+        flex-wrap: nowrap;
     }
 }
 
@@ -11254,6 +11459,11 @@ body.sidebar-collapsed .sidebar-toggle-btn {
     color: #58a6ff;
 }
 
+.rrc-head .rrc-sound-btn.muted {
+    border-color: #f85149;
+    color: #ff7b72;
+}
+
 .rrc-body {
     flex: 1;
     min-height: 0;
@@ -11281,7 +11491,7 @@ body.sidebar-collapsed .sidebar-toggle-btn {
     background: #010409;
     color: #c9d1d9;
     font-family: var(--mono-font) !important;
-    font-size: 13px;
+    font-size: var(--rrc-font, 13px);
     line-height: 1.45;
 }
 
@@ -11330,7 +11540,7 @@ body.sidebar-collapsed .sidebar-toggle-btn {
 
 /* Settings > RRC Client: the times in the room windows (rrcApplyTimes in
    rrc.js); the hub window keeps them in full. */
-@media (min-width: 701px) {
+@media (min-width: 701px) and (pointer: fine), (min-width: 701px) and (min-height: 501px) {
     .rrc-ts-short .rrc-room-screen .rrc-ts {
         width: 5ch;
     }
@@ -11341,7 +11551,7 @@ body.sidebar-collapsed .sidebar-toggle-btn {
     }
 }
 
-@media (max-width: 700px) {
+@media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
     .rrc-ts-off-mobile .rrc-room-screen .rrc-ts {
         display: none;
     }
@@ -11659,7 +11869,7 @@ body.sidebar-collapsed .sidebar-toggle-btn {
     align-items: center;
     gap: 7px;
     padding: 3px 12px;
-    font-size: 13px;
+    font-size: var(--rrc-font, 13px);
     cursor: pointer;
     white-space: nowrap;
 }
@@ -11779,7 +11989,7 @@ body.sidebar-collapsed .sidebar-toggle-btn {
     text-overflow: ellipsis;
 }
 
-@media (max-width: 700px) {
+@media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
     .rrc-view.active {
         flex-direction: column;
     }
@@ -11990,7 +12200,8 @@ body.sidebar-collapsed .sidebar-toggle-btn {
 
 /* Commands and emoji open above the command line. */
 .rrc-cmds,
-.rrc-emojis {
+.rrc-emojis,
+.rrc-style {
     position: absolute;
     bottom: calc(100% + 4px);
     background: #161b22;
@@ -12001,7 +12212,8 @@ body.sidebar-collapsed .sidebar-toggle-btn {
 }
 
 .rrc-cmds[hidden],
-.rrc-emojis[hidden] {
+.rrc-emojis[hidden],
+.rrc-style[hidden] {
     display: none;
 }
 
@@ -12088,21 +12300,362 @@ body.sidebar-collapsed .sidebar-toggle-btn {
     font-size: 11px;
 }
 
+/* Emoji: ten a page (2 rows of 5), the groups and the arrows under them. */
 .rrc-emojis {
     right: 12px;
-    display: grid;
-    grid-template-columns: repeat(8, 34px);
-    gap: 2px;
     padding: 6px;
+    width: 280px;
+    max-width: calc(100% - 24px);
 }
 
-.rrc-emoji {
-    width: 34px;
-    height: 32px;
+.rrc-emoji-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 2px;
+}
+
+.rrc-emoji-label {
+    color: #6e7681;
+    font-size: 10px;
+    text-align: center;
+    margin: 2px 0;
+}
+
+.rrc-emoji-nav {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-top: 1px solid #21262d;
+    padding-top: 4px;
+}
+
+.rrc-egroups {
+    display: flex;
+    flex: 1;
+    justify-content: space-between;
+}
+
+.rrc-epage,
+.rrc-egroup {
     border: none;
     border-radius: 5px;
     background: none;
-    font-size: 19px;
+    color: #c9d1d9;
+    cursor: pointer;
+    padding: 0;
+}
+
+/* Big enough for a finger, apart from the groups beside them. */
+.rrc-epage {
+    flex: none;
+    width: 34px;
+    height: 32px;
+    font-size: 26px;
+    line-height: 1;
+    background: #161b22 !important;
+    border: 1px solid #30363d !important;
+}
+
+.rrc-egroup {
+    width: 20px;
+    height: 24px;
+    font-size: 13px;
+    opacity: 0.55;
+}
+
+.rrc-egroup.on {
+    opacity: 1;
+    background: #21262d;
+}
+
+.rrc-epage:hover,
+.rrc-egroup:hover {
+    background: #21262d;
+    opacity: 1;
+}
+
+/* Colours and styles: the palette, the style on shown on its button. */
+.rrc-style {
+    left: 12px;
+    width: 280px;
+    max-width: calc(100% - 24px);
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.rrc-style-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.rrc-style-gap {
+    flex: 1;
+}
+
+.rrc-style-tab,
+.rrc-style-tog,
+.rrc-style-reset,
+.rrc-fx {
+    border: 1px solid #30363d;
+    border-radius: 5px;
+    background: #0d1117;
+    color: #c9d1d9;
+    font-size: 12px;
+    height: 24px;
+    padding: 0 7px;
+    cursor: pointer;
+}
+
+.rrc-style-tog {
+    min-width: 24px;
+}
+
+.rrc-style-close {
+    margin-left: 4px;
+    font-size: 15px;
+    line-height: 1;
+}
+
+.rrc-style-close:hover {
+    border-color: #f85149;
+}
+
+.rrc-style-tab.on,
+.rrc-style-tog.on,
+.rrc-fx.on {
+    border-color: #58a6ff;
+    background: #1f2a3a;
+}
+
+.rrc-style-tog:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.rrc-style-reset:hover {
+    border-color: #f85149;
+}
+
+.rrc-style-reset:disabled {
+    opacity: 0.35;
+    cursor: default;
+    border-color: #30363d;
+}
+
+.rrc-swatches {
+    display: grid;
+    grid-template-columns: repeat(9, 1fr);
+    gap: 3px;
+}
+
+.rrc-swatch {
+    height: 22px;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    cursor: pointer;
+    padding: 0;
+}
+
+.rrc-swatch {
+    -webkit-touch-callout: none;
+    user-select: none;
+}
+
+.rrc-swatch.on {
+    outline: 2px solid #58a6ff;
+    outline-offset: 1px;
+}
+
+/* The colour of the back: an orange ring, the text a blue one; one box can be both. */
+.rrc-swatch.on-b {
+    box-shadow: 0 0 0 2px #0d1117, 0 0 0 4px #d29922;
+}
+
+.rrc-swatch.on.on-b {
+    outline-offset: 3px;
+}
+
+.rrc-style-sample {
+    font-size: 14px;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.rrc-style-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: #8b949e;
+    margin-right: 6px;
+}
+
+.rrc-style-chip i {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 1px solid #30363d;
+    border-radius: 3px;
+    font-style: normal;
+    font-size: 11px;
+    line-height: 14px;
+    text-align: center;
+}
+
+.rrc-style-chip.f {
+    color: #58a6ff;
+}
+
+.rrc-style-chip.b {
+    color: #d29922;
+}
+
+/* The box with colours: its text drawn by a copy under it (rrcMirror),
+   the textarea on top only for the caret and the selection. */
+.rrc-input-area {
+    position: relative;
+    z-index: 1;
+}
+
+.rrc-input-area.rrc-styled {
+    color: transparent;
+    background: transparent;
+    caret-color: #e6edf3;
+}
+
+.rrc-input-area::placeholder {
+    color: #8b949e;
+    font-weight: 400;
+    font-style: normal;
+}
+
+.rrc-mirror {
+    position: absolute;
+    box-sizing: border-box;
+    margin: 0;
+    border-style: solid;
+    border-color: transparent;
+    background: #010409;
+    color: #e6edf3;
+    font-weight: 400;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    overflow: hidden;
+    pointer-events: none;
+    visibility: hidden;
+    z-index: 0;
+}
+
+.rrc-mirror.on {
+    visibility: visible;
+}
+
+.rrc-mirror,
+.rrc-mirror * {
+    font-family: var(--mono-font) !important;
+}
+
+/* The small bar over a selection in the box. */
+.rrc-sel {
+    position: absolute;
+    bottom: calc(100% + 2px);
+    display: flex;
+    gap: 3px;
+    padding: 4px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 7px;
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.5);
+    z-index: 31;
+}
+
+.rrc-sel[hidden] {
+    display: none;
+}
+
+.rrc-style-hint {
+    font-size: 10px;
+    color: #6e7681;
+}
+
+.rrc-swatch-none {
+    background: #0d1117;
+    color: #8b949e;
+    font-size: 13px;
+}
+
+.rrc-fxs {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 3px;
+}
+
+/* Presets: text and back together, big enough for a finger. */
+.rrc-presets {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 4px;
+}
+
+.rrc-preset {
+    height: 28px;
+    border: 1px solid #30363d;
+    border-radius: 5px;
+    font-weight: 700;
+    font-size: 13px;
+    cursor: pointer;
+    padding: 0;
+    -webkit-touch-callout: none;
+    user-select: none;
+}
+
+.rrc-preset.on {
+    outline: 2px solid #58a6ff;
+    outline-offset: 1px;
+}
+
+.rrc-fx {
+    padding: 0 2px;
+    font-weight: 700;
+    font-size: 11px;
+    overflow: hidden;
+}
+
+.rrc-style-btn {
+    position: relative;
+    font-size: 15px;
+}
+
+.rrc-style-btn.active::after {
+    content: '';
+    position: absolute;
+    left: 6px;
+    right: 6px;
+    bottom: 3px;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--rrc-style-dot, #c9d1d9);
+}
+
+/* A message with colours: the background as a small chip. */
+.rrc-fmt-chip {
+    padding: 0 3px;
+    border-radius: 3px;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+}
+
+.rrc-emoji {
+    width: 100%;
+    height: 38px;
+    border: none;
+    border-radius: 5px;
+    background: none;
+    font-size: 22px;
     cursor: pointer;
 }
 
@@ -12115,7 +12668,7 @@ body.sidebar-collapsed .sidebar-toggle-btn {
     color: #6e7681;
 }
 
-@media (max-width: 700px) {
+@media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
     .rrc-head .rrc-me-head {
         order: 5;
     }
@@ -12126,10 +12679,6 @@ body.sidebar-collapsed .sidebar-toggle-btn {
 
     .rrc-cmd-args {
         display: none;
-    }
-
-    .rrc-emojis {
-        grid-template-columns: repeat(6, 34px);
     }
 
     .rrc-users-grip {
@@ -12282,7 +12831,7 @@ body.center-pages .page-content:has(> .cache-search-page),
     overflow-wrap: anywhere;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .cache-search-page {
         padding: 10px 8px 6px;
     }
@@ -12297,7 +12846,7 @@ body.center-pages .page-content:has(> .cache-search-page),
 }
 
 /* Phones: no state dots on the tabs, there is little room. */
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .tab .app-tab-state,
     .tab .page-tab-state {
         display: none !important;
@@ -12333,13 +12882,13 @@ body.center-pages .page-content:has(> .cache-search-page),
     border-color: #1f6feb;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .list-toggle-btn {
         display: none;
     }
 }
 
-@media (min-width: 768px) {
+@media (min-width: 768px) and (pointer: fine), (min-width: 768px) and (min-height: 501px) {
     .list-collapsed .bbs-side {
         width: 52px !important;
         min-width: 0;
@@ -12447,7 +12996,7 @@ body.app-window .content {
     display: none;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .bar-iconized .bar-txt {
         display: none;
     }
@@ -12468,7 +13017,7 @@ body.app-window .content {
 
 /* Phones: the RRC head keeps the room, its hub and the topic; the address
    and the status line stay on desktop (too tall on a phone). */
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .rrc-head .rrc-head-addr,
     .rrc-head .rrc-head-status {
         display: none !important;
@@ -12508,7 +13057,7 @@ body.app-window .content {
     text-overflow: ellipsis;
 }
 
-@media (min-width: 768px) {
+@media (min-width: 768px) and (pointer: fine), (min-width: 768px) and (min-height: 501px) {
     .messenger-view .msg-bar-head,
     .messenger-view .msg-list {
         width: 340px;
@@ -12524,7 +13073,7 @@ body.app-window .content {
 
 /* Phones: no AutoReply button - the moon does away on/off and
    Settings has every switch; one icon less keeps the x on the same line. */
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .auto-reply-btn {
         display: none !important;
     }
@@ -12794,7 +13343,7 @@ body.app-window .content {
     font-size: 13px;
     line-height: 1;
     padding: 1px 6px;
-    margin-left: 4px;
+    margin-right: 4px;
 }
 .settings-link-btn:hover {
     border-color: #58a6ff;
@@ -12836,4 +13385,115 @@ body.app-window .content {
         max-height: 32px !important;
         padding: 0 !important;
     }
+}
+
+/* rBrowser's logo (templates/logo.png): the splash screen while the page
+   starts, the clients' empty pages, Settings (by Restart / Shut down) and
+   About. */
+.rb-splash {
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background: radial-gradient(circle at 50% 42%, #1a1033 0%, #0d1117 60%);
+    transition: opacity .5s ease;
+}
+
+.rb-splash-out {
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* The two logos one on the other: the second (another glow) fades in. */
+.rb-splash-art {
+    position: relative;
+    width: 240px;
+    height: 240px;
+    animation: rb-splash-pulse 2.4s ease-in-out infinite;
+    will-change: transform;
+}
+
+.rb-splash-logo {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.rb-splash-fade {
+    opacity: 0;
+    animation: rb-splash-fade 1.4s ease-in-out 1.1s forwards;
+    will-change: opacity;
+}
+
+@keyframes rb-splash-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.03); }
+}
+
+@keyframes rb-splash-fade {
+    to { opacity: 1; }
+}
+
+.rb-splash-name {
+    color: #e6edf3;
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: .5px;
+}
+
+.rb-splash-sub {
+    color: #8b949e;
+    font-size: 13px;
+}
+
+.rb-logo {
+    width: 22px;
+    height: 22px;
+    flex: 0 0 auto;
+    vertical-align: middle;
+}
+
+.client-welcome .rb-logo-welcome {
+    display: block;
+    width: 96px;
+    height: 96px;
+    margin: 0 auto 8px;
+    filter: drop-shadow(0 0 10px rgba(0, 200, 120, .35));
+}
+
+.settings-power {
+    flex-wrap: wrap;
+}
+
+.settings-power-logo {
+    flex: 0 0 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding-bottom: 4px;
+    color: #8b949e;
+    font-size: 12px;
+}
+
+.settings-power-logo .rb-logo {
+    width: 28px;
+    height: 28px;
+}
+
+.settings-about-logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 6px;
+}
+
+.settings-about-logo .rb-logo {
+    width: 56px;
+    height: 56px;
 }

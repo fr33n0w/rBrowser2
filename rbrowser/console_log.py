@@ -38,7 +38,9 @@ import builtins
 import json
 import os
 import sys
+import threading
 import time
+from collections import deque
 from typing import Any, Dict, Iterable, Optional
 
 CATEGORIES = ("errors", "connection", "identity", "ephemeral", "announces", "messenger",
@@ -159,6 +161,8 @@ class ConsoleLog:
             return
         if self.keeps(args):
             self.say(*args, **kwargs)
+        else:
+            self._remember(args)
 
     def say(self, *args: Any, **kwargs: Any) -> None:
         """Printed with the time, whatever the categories (rBrowser.py's own
@@ -171,7 +175,30 @@ class ConsoleLog:
             self._blank = True
         else:
             self._blank = first.endswith("\n")
-        _real_print(*stamped(args), **kwargs)
+        line = stamped(args)
+        self._remember(args, line)
+        _real_print(*line, **kwargs)
+
+    # The last lines, all categories, for /api/log (rBrowser --info): the
+    # terminal of an rBrowser started as a service or as the app is nowhere
+    # to be seen.
+    KEEP = 1000
+    _recent: "deque" = deque(maxlen=KEEP)
+    _seq = 0
+    _lock = threading.Lock()
+
+    def _remember(self, args: tuple, line: Optional[tuple] = None) -> None:
+        text = " ".join(str(a) for a in (line or stamped(args))).strip("\n")
+        if not text.strip():
+            return
+        with self._lock:
+            ConsoleLog._seq += 1
+            self._recent.append((ConsoleLog._seq, text))
+
+    def recent(self, after: int = 0) -> Dict[str, Any]:
+        with self._lock:
+            lines = [(n, t) for n, t in self._recent if n > after]
+            return {"status": "success", "last": ConsoleLog._seq, "lines": [t for _, t in lines]}
 
 
 console = ConsoleLog()

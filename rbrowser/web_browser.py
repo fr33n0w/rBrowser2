@@ -7,6 +7,7 @@ information about nodes, and exposes helpers used by the Flask API.
 
 from __future__ import annotations
 
+import os
 import queue
 import threading
 import time
@@ -16,6 +17,15 @@ from typing import Any, Dict, Optional
 import RNS
 from . import rnsquiet
 import RNS.vendor.umsgpack as msgpack
+
+# rnsd answers its control port only with its own rpc_key: an rnsd started by another user refuses this one.
+RPC_REJECTED = "rnsd runs under another user and refuses rBrowser: give rBrowser its rpc_key (README, Troubleshooting)"
+RPC_KEY_CMD = ("python3 -c \"import RNS, os; print(RNS.Identity.full_hash(RNS.Identity.from_file("
+               "os.path.expanduser('~/.reticulum/storage/transport_identity')).get_private_key()).hex())\"")
+
+
+def _rpc_rejected(exc: BaseException) -> bool:
+    return "digest sent was rejected" in str(exc) or type(exc).__name__ == "AuthenticationError"
 
 
 def _patch_rpc_retry() -> None:
@@ -42,6 +52,28 @@ def _patch_rpc_retry() -> None:
 
     RNS.Reticulum.get_rpc_client = get_rpc_client
     RNS.Reticulum._rbrowser_rpc_retry = True
+
+
+def _wait_for_rpc(reticulum, seconds: float = 300.0) -> bool:
+    """At boot rnsd opens its shared port before its RPC port (up to ~3 min later): wait for that one too."""
+    if not getattr(reticulum, "is_connected_to_shared_instance", False):
+        return True
+    deadline = time.time() + seconds
+    told = False
+    while True:
+        try:
+            reticulum.get_rpc_client().close()
+            if told:
+                print("🟢 rnsd control port is answering")
+            return True
+        except OSError:
+            if time.time() >= deadline:
+                print("⚠️ rnsd control port still not answering, going on anyway")
+                return False
+            if not told:
+                print("⏳ rnsd is still starting up, waiting for its control port...")
+                told = True
+            time.sleep(2)
 
 
 from .favorites import Favorites
@@ -222,6 +254,7 @@ class NomadNetWebBrowser:
             RNS.loglevel = RNS.LOG_CRITICAL
 
             self.reticulum = self._ensure_reticulum_instance()
+            _wait_for_rpc(self.reticulum)
 
             self.nomadnet_handler = NomadNetAnnounceHandler(self)
             RNS.Transport.register_announce_handler(self.nomadnet_handler)
@@ -252,6 +285,15 @@ class NomadNetWebBrowser:
             self.reticulum_ready = False
             self.connection_state = "failed"
             self.reticulum_error = str(exc) or type(exc).__name__
+            if _rpc_rejected(exc):
+                self.reticulum_error = RPC_REJECTED
+                # One print: indented lines alone would fall in "activity", hidden by default.
+                print(f"❌ Failed to initialise Reticulum: {RPC_REJECTED}\n"
+                      f"   As the user that runs rnsd, this prints its key:\n"
+                      f"   {RPC_KEY_CMD}\n"
+                      f"   then in {os.path.join(RNS.Reticulum.configdir, 'config')} under [reticulum] add:"
+                      f" rpc_key = <that key>, and restart rBrowser.")
+                return False
             print(f"❌ Failed to initialise Reticulum: {self.reticulum_error}")
             print("   The web interface stays up and shows this in its status bar.")
             return False
@@ -334,7 +376,8 @@ class NomadNetWebBrowser:
         self.last_announce_time = time.time()
 
         if node_name.startswith("EmptyNode_") or node_name.startswith("BinaryNode_") or node_name == "UNKNOWN":
-            print(f"Filtered test node: {hash_str[:16]} -> {node_name}")
+            why = {"E": "no name", "B": "unreadable name"}.get(node_name[0], "unknown name")
+            print(f"Skipped node announce with {why}: {clean_hash_str}")
             return
 
         node_entry = self._list_node(hash_str, clean_hash_str, node_name, announced_identity,
@@ -465,6 +508,8 @@ class NomadNetWebBrowser:
 
     @staticmethod
     def _decode_node_name(app_data: Optional[bytes], hash_str: str) -> str:
+        # The hash comes as RNS.prettyhexrep, "<...>": [:8] took the "<" too.
+        hash_str = hash_str.strip("<>")
         if app_data:
             try:
                 return app_data.decode("utf-8")

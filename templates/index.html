@@ -13,13 +13,49 @@
          light and inverts their colours - which is why the interface came
          out with its palette flipped on a phone but not on a desktop. -->
     <meta name="color-scheme" content="dark">
-    <title>rBrowser v2.0.5b - Standalone Reticulum Browser</title>
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <title>rBrowser v2.0.6b - Standalone Reticulum Browser</title>
+    <link rel="icon" type="image/png" href="/logo-small.png">
+    <!-- Dark from the first moment, before style.css, and the splash's logos
+         asked for at once (not after the stylesheet). -->
+    <style>html, body { background: #0d1117; }</style>
+    {% if ui_prefs.get('rbrowser_splash') != 'off' and not request.args.get('app') %}
+    <link rel="preload" as="image" href="/logo.png">
+    <link rel="preload" as="image" href="/logo-fade.png">
+    {% endif %}
     <!-- Absolute paths: the page is also served at /<hash>:/page/x.mu, where
          a relative path resolves under that URL and gets this page back. -->
     <link rel="stylesheet" href="/style.css">
 </head>
 <body class="{{ 'sb-bottom' if ui_prefs.get('rbrowser_statusbar_pos') == 'bottom' else 'sb-top' }}">
+    <!-- Splash screen while the page starts: the logo, which fades into its
+         other glow (logo-fade.png), gone when the page has loaded (at least
+         long enough for the fade). Not in a client's own window (?app=),
+         which opens from a page already running, nor when it is switched
+         off (Settings > System Setup). -->
+    {% if ui_prefs.get('rbrowser_splash') != 'off' %}
+    <div class="rb-splash" id="rb-splash" aria-hidden="true">
+        <div class="rb-splash-art">
+            <img class="rb-splash-logo" src="/logo.png" alt="">
+            <img class="rb-splash-logo rb-splash-fade" src="/logo-fade.png" alt="">
+        </div>
+        <div class="rb-splash-name">rBrowser2</div>
+        <div class="rb-splash-sub">Standalone Reticulum Browser</div>
+    </div>
+    <script>
+        (function () {
+            const splash = document.getElementById('rb-splash');
+            if (/[?&]app=/.test(location.search)) { splash.remove(); return; }
+            // The version from the page title, the one place a release changes.
+            const version = (document.title.match(/v\d[\w.]*/) || [''])[0];
+            if (version) splash.querySelector('.rb-splash-sub').textContent += ' · ' + version;
+            const shown = Date.now();
+            window.addEventListener('load', () => setTimeout(() => {
+                splash.classList.add('rb-splash-out');
+                setTimeout(() => splash.remove(), 600);
+            }, Math.max(0, 3000 - (Date.now() - shown))));
+        })();
+    </script>
+    {% endif %}
     <!-- One line across the whole window, whichever client is open: at the
          top or at the bottom (Settings > System Setup, the class on <body>). Icons,
          their names on hover; CPU and RAM, then the clock, at the right end. -->
@@ -30,8 +66,8 @@
             <span class="sb-stat" title="NomadNet nodes: in the node list"><span class="sb-ico"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2.5" width="12" height="9" rx="1"/><path d="M5 14h6M4.5 5.5h4M4.5 8h6"/></svg></span><span class="sb-label">NomadNet nodes:</span><span class="count" id="node-count">0</span></span>
             <span class="sb-heard" id="sb-heard"></span>
         </div>
-        <div class="sb-row sb-usage-row"><span class="sb-usage" id="sb-usage" hidden></span></div>
-        <div class="sb-row sb-clock-row"><span class="sb-clock" id="sb-clock" title="Local time"></span></div>
+        <div class="sb-row sb-usage-row"><button class="sb-update" id="sb-update" hidden title="A new rBrowser is out: open Settings > About"></button><span class="sb-usage" id="sb-usage" hidden></span></div>
+        <div class="sb-row sb-clock-row"><a class="sb-version" id="sb-version" href="https://github.com/fr33n0w/rBrowser2" target="_blank" rel="noopener noreferrer" title="rBrowser version: open the repository on GitHub"></a><span class="sb-clock" id="sb-clock" title="Local time"></span></div>
     </div>
     <div class="main">
         <div class="sidebar" style="position: relative;">
@@ -256,7 +292,8 @@
                 <!-- The same look as the clients' empty pages (clientWelcome). -->
                 <div class="welcome">
                     <div class="client-welcome">
-                        <h2 class="rb-version">rBrowser v2.0.5b</h2>
+                        <img class="rb-logo rb-logo-welcome" src="/logo.png" alt="" aria-hidden="true">
+                        <h2 class="rb-version">rBrowser v2.0.6b</h2>
                         <span class="bbs-title"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor"
                             stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 4h8M5.5 8h8M5.5 12h8"/><circle cx="2.5" cy="4" r=".8"/><circle cx="2.5" cy="8" r=".8"/><circle cx="2.5" cy="12" r=".8"/></svg><span>NomadNet Browser</span></span>
                     </div>

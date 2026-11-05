@@ -1,7 +1,8 @@
 """
 Settings > System Setup > Internet check (off by default). Reticulum keeps saying
 "connected" while the line behind the router is dead: its TCP interfaces
-notice late, and RRC later still. When switched on, every PROBE_EVERY seconds
+notice late, and RRC later still. When switched on, every few seconds (the
+user picks how often among EVERY_CHOICES, PROBE_EVERY by default)
 either a time server is asked the time (NTP: one 48-byte UDP packet, the
 default - a time server keeps no profile of who asks) or a TCP connection is
 opened to the hosts the user chose (nothing sent, closed at once); one
@@ -36,7 +37,9 @@ DEFAULT_HOSTS = "1.1.1.1:443, 9.9.9.9:443"
 DEFAULT_TIME_SERVERS = "pool.ntp.org"
 METHODS = ("ntp", "tcp")
 NTP_PORT = 123
-PROBE_EVERY = 15.0
+PROBE_EVERY = 30.0
+# Seconds offered in Settings: from 10 s to a day.
+EVERY_CHOICES = (10, 30, 60, 120, 300, 600, 1800, 3600, 3 * 3600, 6 * 3600, 12 * 3600, 24 * 3600)
 PROBE_TIMEOUT = 4.0
 DOWN_AFTER = 2
 MAX_HOSTS = 4
@@ -168,6 +171,8 @@ class NetWatch:
         self.state = "off"              # "unknown", "up", "down" once on
         self.since: Optional[float] = None
         self.fails = 0
+        self.last_check: Optional[float] = None     # when the last round really ran
+        self.last_ok: Optional[bool] = None         # and whether something answered
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._wake = threading.Event()
@@ -190,6 +195,8 @@ class NetWatch:
             # A file from before the time servers: it checked hosts.
             self.method = saved.get("method") if saved.get("method") in METHODS else "tcp"
             self.enabled = saved.get("enabled") is True
+            if saved.get("every") in EVERY_CHOICES:
+                self.every = float(saved["every"])
         except (OSError, ValueError, AttributeError):
             pass
         self.state = "unknown" if self.enabled else "off"
@@ -197,7 +204,9 @@ class NetWatch:
     def settings(self) -> Dict[str, Any]:
         return {"enabled": self.enabled, "method": self.method, "hosts": self.hosts_text,
                 "time_servers": self.time_text, "default_hosts": DEFAULT_HOSTS,
-                "default_time_servers": DEFAULT_TIME_SERVERS}
+                "default_time_servers": DEFAULT_TIME_SERVERS, "every": int(self.every),
+                "every_choices": list(EVERY_CHOICES),
+                "last_check": self.last_check, "last_ok": self.last_ok, "now": self.clock()}
 
     def describe(self) -> str:
         return (f"time server {self.time_text}" if self.method == "ntp" else f"hosts {self.hosts_text}")
@@ -209,6 +218,9 @@ class NetWatch:
             return {"status": "error", "error": "Pick a time server or hosts"}
         hosts_text = str(incoming.get("hosts", self.hosts_text) or "").strip()
         time_text = str(incoming.get("time_servers", self.time_text) or "").strip()
+        every = incoming.get("every", self.every)
+        if "every" in incoming and every not in EVERY_CHOICES:
+            return {"status": "error", "error": "Pick how often from the list"}
         try:
             hosts = parse_hosts(hosts_text)
             time_servers = parse_hosts(time_text, NTP_PORT)
@@ -218,8 +230,10 @@ class NetWatch:
             was = self.enabled
             self.enabled, self.hosts, self.hosts_text = enabled, hosts, _hosts_text(hosts)
             self.method, self.time_servers, self.time_text = method, time_servers, _hosts_text(time_servers)
+            self.every = float(every)
             if not enabled:
                 self.state, self.since, self.fails = "off", None, 0
+                self.last_check = self.last_ok = None
             elif not was:
                 self.state, self.since, self.fails = "unknown", None, 0
             woke = was and not enabled and self is _current
@@ -227,7 +241,8 @@ class NetWatch:
             try:
                 from .fileio import atomic_write_json
                 atomic_write_json(self.path, {"enabled": self.enabled, "method": self.method,
-                                              "hosts": self.hosts_text, "time_servers": self.time_text})
+                                              "hosts": self.hosts_text, "time_servers": self.time_text,
+                                              "every": int(self.every)})
             except OSError as exc:
                 return {"status": "error", "error": f"Could not save it: {exc}"}
         if enabled and not was:
@@ -259,6 +274,7 @@ class NetWatch:
         with self._lock:
             if not self.enabled:
                 return self.state
+            self.last_check, self.last_ok = now, ok
             if ok:
                 self.fails = 0
                 if self.state == "down":

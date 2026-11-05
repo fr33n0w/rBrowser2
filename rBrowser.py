@@ -25,6 +25,16 @@ from typing import Tuple
 sys.argv[0] = os.path.abspath(sys.argv[0])
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
+# Started with pythonw (the desktop icon, rbrowser/shortcuts.py): no console,
+# so the log goes to settings/app.log.
+NO_CONSOLE = sys.stdout is None
+if NO_CONSOLE and "--open" not in sys.argv[1:]:
+    try:
+        os.makedirs("settings", exist_ok=True)
+        sys.stdout = sys.stderr = open(os.path.join("settings", "app.log"), "w", encoding="utf-8", buffering=1)
+    except OSError:
+        pass
+
 # A nomadnetwork://, rrc:// or rbrowser:// link clicked somewhere (rbrowser/links.py):
 # hand it to the rBrowser that is running, or start one, and stop here. Done
 # before anything below, which sets up a whole rBrowser - and before the
@@ -36,6 +46,34 @@ if "--open" in sys.argv[1:]:
     _open_args, _ = _open.parse_known_args()
     from rbrowser.links import open_link
     sys.exit(open_link(_open_args.open or "", _open_args.port))
+
+# rBrowser.py --info: the state and the log of the rBrowser already running,
+# asked through its web API. Nothing of a new rBrowser is set up.
+if "--info" in sys.argv[1:]:
+    _info = argparse.ArgumentParser()
+    _info.add_argument("--info", action="store_true")
+    _info.add_argument("--port", type=int, default=None)
+    _info_args, _ = _info.parse_known_args()
+    from rbrowser.info import run_info
+    sys.exit(run_info(_info_args.port))
+
+# The desktop window (rbrowser/appwindow.py), a process of its own started
+# by an rBrowser run with --app: nothing of the server is set up here.
+if "--window" in sys.argv[1:]:
+    from rbrowser.appwindow import run_window
+    sys.exit(run_window(sys.argv))
+
+# --app (the desktop icon) with this folder's rBrowser already running: only
+# a window on it, closing that window leaves rBrowser running.
+if "--app" in sys.argv[1:]:
+    from rbrowser.links import _base_url, running_instances
+    _running = running_instances()
+    if _running:
+        import subprocess
+        _me = [sys.argv[0]] if getattr(sys, "frozen", False) or "__compiled__" in globals() \
+            else [sys.executable, sys.argv[0]]
+        subprocess.Popen(_me + ["--window", "--url", _base_url(_running[0]["host"], _running[0]["port"])])
+        sys.exit(0)
 
 from flask import Flask
 
@@ -63,7 +101,7 @@ print = console_log.console.say
 # UnicodeEncodeError in the middle of a request. reconfigure() changes the
 # encoder itself, and errors="replace" means a character the terminal
 # cannot show costs a question mark rather than a traceback.
-if sys.platform == "win32":
+if sys.platform == "win32" and not NO_CONSOLE:
     try:
         os.system("chcp 65001 >nul")
     except Exception:
@@ -166,6 +204,12 @@ def main() -> int:
                         help="Make nomadnetwork://, rrc:// and rbrowser:// links open in rBrowser, then exit")
     parser.add_argument("--unregister-links", action="store_true",
                         help="Stop opening those links in rBrowser, then exit")
+    parser.add_argument("--info", action="store_true",
+                        help="Show the state of the rBrowser already running here, then follow its log "
+                             "(with --port N for one on another port)")
+    parser.add_argument("--app", action="store_true",
+                        help="Open rBrowser in a window of its own (needs requirements-app.txt); "
+                             "closing it stops rBrowser")
     args = parser.parse_args()
     if args.register_links or args.unregister_links:
         # links is the module imported at the top: importing it again here
@@ -232,6 +276,23 @@ def main() -> int:
         print("🛑 Press Ctrl+C to stop and exit")
         print()
 
+        window = None
+        if args.app:
+            from rbrowser.appwindow import available
+            why_not = available()
+            if why_not:
+                print(f"⚠️ {why_not}")
+                print(f"   rBrowser runs anyway: open http://{host_display}:{args.port} in your browser")
+            else:
+                import subprocess
+                url_host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
+                # A frozen build is its own executable; a script needs the interpreter.
+                me = [sys.argv[0]] if getattr(sys, "frozen", False) or "__compiled__" in globals() \
+                    else [sys.executable, sys.argv[0]]
+                window = subprocess.Popen(me + ["--window", "--url", f"http://{url_host}:{args.port}",
+                                                "--parent", str(os.getpid())])
+                print("🪟 rBrowser window opened: closing it stops rBrowser")
+
         if browser.init_reticulum():
             browser.start_monitoring()
         else:
@@ -242,6 +303,8 @@ def main() -> int:
         while server.is_alive():
             server.join(0.5)
             browser.run_main_thread_tasks()
+            if window is not None and window.poll() is not None:
+                raise KeyboardInterrupt   # the window was closed: same as Ctrl+C
         print("❌ The web server stopped - see the message above (is the port already in use?)")
         return 1
 

@@ -145,6 +145,44 @@ if [ "$USE_VENV" = no ] && [ -x "$USER_BIN/rnsd" ] && ! command -v rnsd >/dev/nu
     echo "Open a new terminal for that to apply there too."
 fi
 
+# ─── The app version: rBrowser in a window of its own (--app) ───
+# Only where there is a screen: macOS, or a Linux desktop. Not Termux, not
+# a Pi reached over ssh.
+APP=no
+HAS_SCREEN=no
+if [ "$OS" = "Darwin" ]; then
+    HAS_SCREEN=yes
+elif [ "$TERMUX" = no ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+    HAS_SCREEN=yes
+fi
+if [ "$HAS_SCREEN" = yes ]; then
+    echo
+    if ask "Also install the app version, rBrowser in a window of its own (rBrowser.py --app)?" n; then
+        APP_OK=yes
+        if [ "$OS" = "Linux" ]; then
+            # pywebview draws the window with the system's GTK and WebKit2.
+            if command -v apt-get >/dev/null 2>&1; then
+                WEBKIT=gir1.2-webkit2-4.1
+                apt-cache show "$WEBKIT" >/dev/null 2>&1 || WEBKIT=gir1.2-webkit2-4.0
+                sudo apt-get install -y python3-gi python3-gi-cairo gir1.2-gtk-3.0 "$WEBKIT" || APP_OK=no
+            else
+                warn "Install GTK 3, WebKit2GTK and PyGObject from your distribution's packages for the window."
+            fi
+            # rBrowser's venv sees the system's Python packages too, for that
+            # PyGObject: what is installed in the venv still comes first.
+            if [ "$USE_VENV" = yes ] && [ -f "$VENV/pyvenv.cfg" ]; then
+                sed -i 's/^include-system-site-packages *= *false/include-system-site-packages = true/' "$VENV/pyvenv.cfg"
+            fi
+        fi
+        # shellcheck disable=SC2086
+        if [ "$APP_OK" = yes ] && "$PY" -m pip install $PIP_OPTS -r requirements-app.txt; then
+            APP=yes
+        else
+            warn "The app version was not installed (see above). rBrowser works anyway, in the web browser."
+        fi
+    fi
+fi
+
 # ─── Reticulum config: rmap.world there and switched on ───
 say "Reticulum configuration"
 # BackboneInterface is the faster TCP of Reticulum, on Linux and Android;
@@ -198,6 +236,7 @@ else
     else
         echo "  cd \"$DIR\" && $(basename "$PY") rBrowser.py"
     fi
+    [ "$APP" = yes ] && echo "  (add --app for rBrowser in a window of its own)"
     [ "$TERMUX" = yes ] && echo "  (Termux: run termux-wake-lock first, so Android does not pause it)"
 fi
 echo

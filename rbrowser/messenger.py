@@ -2434,6 +2434,25 @@ class Messenger:
         self.revision += 1
         return {"status": "success"}
 
+    def forget_file_path(self, rel: str) -> bool:
+        """A received file deleted from Settings > File Downloads: the chat
+        shows it as deleted, as when deleted from the chat."""
+        if self.store is None:
+            return False
+        found = []
+        with self.store.lock:
+            for address, conv in self.store.data.items():
+                for record in conv.get("messages", []):
+                    for meta in record.get("files", []) or []:
+                        if meta.get("path") == rel and not meta.get("deleted"):
+                            meta["deleted"] = True
+                            found.append(address)
+            for address in set(found):
+                self.store._save(address)
+        if found:
+            self.revision += 1
+        return bool(found)
+
     def show_file(self, peer: Any, local_id: Any, index: Any) -> Dict[str, Any]:
         """Open the folder of a downloaded file on this computer, the file selected."""
         address, record, meta = self._file_record(peer, local_id, index)

@@ -159,11 +159,11 @@ class ServerSettings:
     def can_restart(self) -> bool:
         """
         Only when started through rBrowser.py main(), which is what fills in
-        `running`. Under `waitress-serve rBrowser:app` (the Docker image) the
-        listening address belongs to whoever launched it, and re-running
-        sys.argv would start the wrong program.
+        `running`. Under `waitress-serve rBrowser:app` the listening address
+        belongs to whoever launched it, and re-running sys.argv would start
+        the wrong program. In Docker the container is restarted from outside.
         """
-        return bool(self.running)
+        return bool(self.running) and not os.path.exists("/.dockerenv")
 
     def describe(self) -> Dict[str, Any]:
         from .mdns import available, local_name as announcer
@@ -175,7 +175,24 @@ class ServerSettings:
             "cli": dict(self.cli),
             "restart_required": self.restart_required(),
             "can_restart": self.can_restart(),
+            "addresses": self.addresses(),
         }
+
+    def addresses(self) -> Dict[str, Any]:
+        """Where this rBrowser answers now: this computer, and the home
+        network when it listens on every address (Settings and About)."""
+        if not self.running:
+            return {}
+        from .mdns import lan_addresses
+        host, port = self.running["host"], self.running["port"]
+        everywhere = host in ("0.0.0.0", "", "::")
+        local = "127.0.0.1" if everywhere else host
+        try:
+            lan = lan_addresses(host)
+        except Exception:
+            lan = []
+        return {"local": f"http://{local}:{port}", "lan": [f"http://{ip}:{port}" for ip in lan],
+                "local_only": host in ("127.0.0.1", "localhost", "::1")}
 
 
 # ---------------------------------------------------------------------- #

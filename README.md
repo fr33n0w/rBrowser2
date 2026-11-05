@@ -19,11 +19,485 @@ A modern, web-based UI for exploring NomadNet nodes and pages over the Reticulum
 
 
 
-> **Beta - v2.0.5b.** rBrowser 2 is published as a beta: everything works, but
+> **Beta - v2.0.6b.** rBrowser 2 is published as a beta: everything works, but
 > some parts of the interface may still have bugs. They are fixed as soon as
 > possible. To hear about updates, switch on *Settings > About > Check for
 > updates at start* (a window tells you when a new version is out, with the
 > link to this page), or press *Check now* there.
+
+## Install guide
+
+Step by step for every supported way: the installer on Windows, Linux,
+Raspberry Pi and macOS, pip, venv, Docker and Termux on Android, then how to
+start it and the first setup.
+
+- **English:** [rBrowser2 Install Guide (PDF)](docs/rBrowser2_Install_Guide_EN.pdf)
+- **Italiano:** [Guida all'installazione di rBrowser2 (PDF)](docs/rBrowser2_Guida_Installazione_IT.pdf)
+
+In short:
+
+```
+git clone https://github.com/fr33n0w/rBrowser2.git
+cd rBrowser2
+install.bat                  (Windows)
+bash install.sh              (Linux, Raspberry Pi, macOS, Termux)
+python3 rBrowser.py          (Windows: python rBrowser.py)
+```
+
+Then open http://localhost:5000. The full instructions are also further
+down, in [Installation](#installation).
+
+## Contents
+
+* [Install guide (PDF)](#install-guide)
+* [Overview](#overview)
+* [Features](#features)
+* [Requirements](#requirements)
+* [Installation](#installation)
+  * [Quick start](#quick-start)
+  * [Install Option 1: Run from Terminal](#install-option-1-run-from-terminal)
+  * [Install Option 2: Docker & Docker Compose](#install-option-2-docker--docker-compose)
+  * [Install Option 3: Termux on Android](#install-option-3-termux-on-android)
+* [New in version 2.0+](#new-in-version-20) (every feature in detail)
+* [Usage](#usage)
+* [Next Implementations](#next-implementations)
+* [Known Issues](#known-issues)
+* [Bug or Issues Report](#bug-or-issues-report)
+* [Development Notes](#development-notes)
+* [Troubleshooting](#troubleshooting)
+* [Traffic Usage Warning](#traffic-usage)
+* [License](#license)
+* [Contributing](#contributing)
+* [External Dependencies](#external-dependencies)
+* [Screenshots](#screenshots)
+
+## Overview
+
+**rBrowser** is a cross-platform, standalone, web-based client for the Reticulum
+network: one web interface, on your PC or on your phone, for the main things you
+do on Reticulum.
+
+- **NomadNet browser**: finds nodes from their announces as they come in and
+  renders their Micron pages the way NomadNet does - address bar, tabs, history,
+  favourites, forms, file downloads, a page cache and a local (no-crawler) search engine.
+- **LXMF messenger**: chats with any LXMF client (Sideband, NomadNet, MeshChat...),
+  multi-identities support, attachments, images, audio files and voice messages, propagation nodes supporting discovery and auto-connect / autocycle if one is unreachable,
+  stamps, automatic replies to keyword, away and echobot messages.
+- **RRC chat**: IRC-style rooms on Reticulum Relay Chat hubs, with several hubs and
+  rooms at once, users, operators, mentions and notifications, automatic replies to keyword, away and echobot messages as for the lxmf messenger.
+- **BBS client**: RetiBBS boards over Reticulum, with a terminal-style screen, with nomadnet bbs discovery and compatible with my upcoming BBS project.
+- **RMAP**: the map of the network from rmap.world, to discover NomadNet nodes,
+  propagation nodes, RRC hubs, BBS servers and entry points, and open them in one click.
+
+Everything runs locally: the interface is served by a small web server (default
+host 0.0.0.0, port 5000, both configurable), so it opens in any browser, on the
+same machine or from a phone on your network. Each client can be switched on or
+off in Settings: at first only the NomadNet browser is on.
+
+It also runs well on a remote machine (a Raspberry Pi at home, a server):
+- **Remote access**: a built-in Cloudflare reverse tunnel reaches it from anywhere,
+  with no ports to open on the router, behind an access password;
+- **DDNS**: the built-in dynamic DNS client gives it a host name, so you reach it by
+  name instead of by IP;
+- **Guest mode**: a second password lets other people use it if enabled: they browse NomadNet
+  and, if you allow it, chat on RRC and BBS or use the LXMF messenger, while main admin
+  settings, identities and private keys stay yours.
+
+-----
+
+## Features:
+
+- **Real-time Node Discovery**: Detects and lists NomadNetwork nodes as they announce on the network
+- **Web-based Interface**: Modern, responsive browser interface accessible at `localhost:5000`
+- **Micron Parser**: Renders NomadNet's Micron markup language with proper formatting and styling
+- **URL Navigation**: Address bar with back/forward navigation and manual URL input
+- **Dual View Modes**: Toggle between Rendered Micron content and Raw page view
+- **Link Navigation**: Click on links within Micron content to navigate between pages
+- **Status Bar**: One line across the window, whatever client is open (top by default, or bottom: Settings > System Setup): connection, then icons for all the announces, NomadNet nodes and, for the clients that are on, LXMF peers, propagation nodes, RRC hubs, BBS servers and RMAP nodes (heard live since start; the tooltip adds what Reticulum remembers), CPU and RAM, the battery (of the device you are using: from a phone, the phone's own where its browser tells it, Chrome on https), the rBrowser version and a clock at the right end
+- **File Download Support**: Download files hosted on nomadnet nodes
+- **Add To Favorites**: Favorite system with star button synched across the whole UI tabs
+- ℹ **Node Info**: Extended node info for remote node hosting page in the node list
+- **Fingerprint**: Allow to identify with identity and LXMF address to remote host with a button
+- **Identities**: Several identities (one per account), an ephemeral throwaway identity, per-node auto-identify; the identity button in the page bar drops a menu to browse as another one (new ephemeral, copy the hash, settings)
+- **Custom address generator**: Identities whose LXMF address starts with characters you choose (vanity address), searched in the background
+- **Web server settings**: Host and port editable in Settings, with automatic restart
+- **Inline Images**: Renders images embedded in Micron pages, fetched over the node's `/media` handler
+- **Page Partials**: Self-refreshing regions of a page, as served by NomadNet 1.4.x
+- **Tables & Folds**: Micron tables and collapsible sections are rendered properly
+- **Colours**: 24-bit colours (`` `FTrrggbb ``, `` `BTrrggbb ``) and the page's own background and text colour (`#!bg=`, `#!fg=`), as NomadNet
+- **Page Status**: LIVE / CACHE / OFFLINE COPY label by the address bar; the cache follows the node's `#!c=` like NomadNet
+- **Page Screenshot**: The whole page saved as a PNG
+- **Node List**: Hops, your visits and saved pages on each card; sort by most visited; holds still under the pointer; menu on right-click or long press; hide nodes
+- **History**: Pages you opened, beside Favorites, with size and age limits in Settings
+- **Enter to Send**: Enter in a page's text field presses its send link (Ctrl+Enter in multi-line fields)
+- **Search**: Node list, favorites and saved pages from the sidebar, with suggestions in the address bar
+- **Request Path**: Forget the path to a node and ask for a new one; Check path shows the one held
+- **Messages (LXMF)**: Messenger tab with direct delivery, identity of your choice, announces at start and on a timer
+- **Propagation nodes**: Found from announces, nearest or chosen; failed direct messages are left there, Sync now and on a timer; a node that does not answer is set aside and the next one used; optional rotation
+- **Files and images in messages**: Paperclip, drag & drop or paste; Sideband-compatible; received files in `downloads/`
+- **Voice messages**: Sideband voice messages (Opus, Codec2) and audio files play in the chat
+- **Reactions, markdown, nicknames**: LXMF reactions, markdown messages (switchable), names of your own for contacts
+- **Message search**: Every conversation, from the Messages tab
+- **Link menu**: Right-click a link in a page for what fits its kind (page, file, form, LXMF, RRC, web)
+- **RRC chat**: IRC-style rooms on RRC hubs (client v2, simple, follows rrcd 0.3.2 and NomadNet), room tabs, users, mentions
+- **RMAP**: The nodes rmap.world hears, on a map and in lists by kind, each one a click from use
+- **Favourite contacts**: Starred conversations first in Messages
+- **Light rendering**: Long pages drawn as plain monospace text, about ten times faster
+- **Stamps for incoming messages**: Anti-spam cost in your announce, tickets for your contacts
+- **Local network name**: `rbrowser.local` via mDNS, optional
+- **System links**: `nomadnetwork://` and `rbrowser://` links open in the rBrowser that is running (Windows, Linux)
+- **Settings in categories**: Search, one Save for all (the dialog stays open; Close, x or Esc close it), unsaved-changes and restart-needed warnings
+- **Reload, Restart and Shut down**: Buttons at the foot of the Settings categories: Reload reloads the page, Restart and Shut down ask first (not shown to guests)
+- **Contact colours**: Pick a contact's colour with a preview; click the logo for its info
+- **Recent nodes at start**: Optional, from Reticulum's known announces, marked until they announce again
+- **Screenshot settings**: On/off, quality for desktop and mobile
+- **Advanced options**: Unlocked by tapping the version seven times; ephemeral identity messages with limits
+- **Responsive Fit**: Text at full size on any screen, only too-wide ASCII art shrinks; measured on the device, so pages fit on real phones too
+- ⏱ **Adaptive Timeouts**: Waits as long as the path actually needs instead of a fixed clock, so slow LoRa nodes are not declared dead
+- **Notifications & Logs**: Notifications in the web UI; the terminal shows only the kinds of line you choose in Settings
+- **BBS client**: RetiBBS boards over Reticulum, several at once, terminal-style screen
+- **Automatic replies**: Keywords, away message and echo, for LXMF and RRC
+- **Remote access & DDNS**: Cloudflare tunnel to reach it from anywhere, dynamic DNS for a host name, access password
+- **Guest mode**: A second password for other people; settings, identities and keys stay yours
+- **One-click install**: `install.sh`, `install.bat` and `docker.sh` set up the packages and Reticulum
+- **And more......**: Download rBrowser and try it now!!
+
+## Requirements
+
+### System Requirements
+
+- **Python**: 3.9 or higher, with pip
+- **Operating System**: Linux, macOS, or Windows (see Tested on, below)
+- **Network**: Access to a Reticulum network (radio interfaces, internet gateways, or local testnet)
+
+### Tested on
+
+| Where | Status |
+|---|---|
+| Windows 10 (Python 3.12) | tested: everyday development machine |
+| Raspberry Pi Zero 2 W, Raspberry Pi OS 13 trixie (Python 3.13, RNS 1.5.7) | tested |
+| Docker on Raspberry Pi Zero 2 W (docker.io 26, compose 2.26) | tested: builds in about 9 minutes, image 271 MB, runs in 512 MB of RAM (uses swap) |
+| Linux Mint 21 (Python 3.12.3) | tested: installed with install.sh |
+| Android, Termux 0.118.0 (Python 3.14) | tested: installed with install.sh |
+| Debian 13, in a venv (install.sh option 1, or a venv of your own) | tested on the Raspberry Pi |
+| Browsers: Chrome desktop, Chrome on Android (phone layout) | tested |
+| macOS | not tested (no Mac available): it should work as on Linux, reports welcome |
+| Other Linux desktops | not tested yet: same code as the Pi |
+
+### Python Dependencies (included in requirements.txt)
+
+`pip install -r requirements.txt` (or the installer) puts in all of them:
+
+| Package | What rBrowser uses it for |
+|---|---|
+| `rns` >= 1.0.0 | Reticulum itself: the connection to the network, the announces of the nodes, the pages and files fetched from them. It also brings `rnsd`, `rnstatus` and the other Reticulum tools |
+| `lxmf` >= 1.2.0 | LXMF messages: the Messages tab, propagation nodes, stamps |
+| `flask` >= 2.0.0 | The web interface: the pages and calls behind what you see in the browser |
+| `waitress` >= 2.1.2 | The web server that serves that interface, to this machine and, if you want, to your phone |
+| `zeroconf` >= 0.130.0 | The `rbrowser.local` name on your network, so phones find it without an IP |
+| `psutil` >= 5.9.0 | rBrowser's CPU and RAM in the status bar and in Settings > About (without it, Linux and Android read them from /proc) |
+
+Optional, not in requirements.txt: `pycodec2` or `ffmpeg` on the PATH (to play Codec2 voice messages);
+`requirements-app.txt` (`pywebview`, `pystray`) for the app window (`--app`).
+
+
+-----
+
+## Installation
+
+### Quick start
+
+**First time with Reticulum?** Use the installer, inside the rBrowser folder:
+
+| System | Run |
+|---|---|
+| Linux, Raspberry Pi, macOS, Android (Termux) | `bash install.sh` |
+| Windows | double-click `install.bat` (or run it in cmd) |
+| Docker (Linux, Pi) | `bash docker.sh` (`bash docker.sh stop` to stop it) |
+
+The installer:
+
+- installs the Python packages of `requirements.txt`. In a venv you have
+  activated, it installs there. On Debian 12+, Ubuntu
+  and Pi OS it asks where: a venv in this folder (`.venv`, then start with
+  `.venv/bin/python rBrowser.py`) or your user with
+  `--break-system-packages`, the way the Reticulum manual does. On Termux it
+  takes the prebuilt `python-cryptography`, nothing to compile;
+- makes sure Reticulum reaches rmap.world (`rns_setup.py`): with no config
+  it writes a basic one (a BackboneInterface on Linux and Android, a
+  TCPClientInterface on Windows and macOS); in yours it asks to add
+  rmap.world if missing, or to switch it on if it is there with
+  `enabled = no`. The other interfaces stay as they are, and the old file
+  is kept as `config.before-rbrowser`;
+- puts `rnsd`, `rnstatus` and the other Reticulum programs on your PATH if
+  they are not there (usual on a Raspberry Pi);
+- on Linux, asks whether to start rBrowser as a system service at every boot
+  (or later: Settings > System Setup > Autostart on boot);
+- leaves everything in this folder, and at the end tells you how to start it.
+
+**Reticulum already set up?** No installer needed: in the rBrowser folder
+
+```bash
+pip install -r requirements.txt
+python3 rBrowser.py          # Windows: python rBrowser.py
+```
+
+(Debian 12+ and Pi OS: `pip install --user --break-system-packages -r requirements.txt`, or a venv, see below.)
+
+Then open `http://localhost:5000`. Details for each option below.
+
+**Servers.** Port 4343 of rmap.world is the same server and less crowded.
+Add more than one server to your Reticulum config, so you stay connected
+when one is down: you find them on [rmap.world](https://rmap.world) and in
+rBrowser's own RMAP client.
+
+**First start.** Only the NomadNet browser is on: it listens for announces
+straight away. The LXMF messenger, the RRC chat, the BBS client and RMAP are
+off: switch on the ones you want in Settings, after setting your own
+preferences there (your name, your nick and the rest).
+
+**App window (optional).** `python3 rBrowser.py --app` opens rBrowser in a
+window of its own, with a tray icon, instead of the web browser: Windows,
+Linux desktops (macOS not tested yet). The installers ask whether you want
+it; by hand: `pip install -r requirements-app.txt` (on Linux also GTK and
+WebKit2: `sudo apt install python3-gi gir1.2-webkit2-4.1`). Closing the
+window stops rBrowser; the clients opened "in a new window" become windows
+of the app, each titled with its client (rBrowser2 - LXMF Client...).
+Phones and other computers still reach it in their browser. The splash
+screen at startup can be switched off in Settings > System Setup.
+
+
+## Install Option 1: Run from terminal
+
+1. **Clone the repository:**
+
+   ```bash
+   git clone https://github.com/fr33n0w/rBrowser2.git
+   cd rBrowser2
+   ```
+
+2. **Run the installer** (recommended, above all the first time):
+
+   ```bash
+   bash install.sh          # Linux, Raspberry Pi, macOS, Termux
+   install.bat              # Windows (or double-click it)
+   ```
+
+   It installs the Python packages, makes sure Reticulum reaches rmap.world
+   (writes a basic config if you have none, or offers to add or switch on
+   rmap.world in yours), puts `rnsd` & co. on your PATH and, on Linux, asks
+   whether to start rBrowser as a system service. Everything stays in this
+   folder. Then go to step 3.
+
+   **Or by hand**, if Reticulum is already set up:
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+   On Debian 12+, Ubuntu 23.04+ and Raspberry Pi OS (Bookworm, Trixie) pip
+   refuses with *externally-managed-environment*. Install for your user,
+   the same way the Reticulum manual installs `rns` there:
+
+   ```bash
+   pip install --user --break-system-packages -r requirements.txt
+   ```
+
+   The programs pip installs (`rnsd`, `rnstatus`, `nomadnet`...) go to
+   `~/.local/bin`: if the shell does not find them, open a new terminal or
+   add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc`.
+
+   Not allowed to use `--break-system-packages` (a work PC, say)? A venv:
+
+   ```bash
+   python3 -m venv .venv          # Debian: sudo apt install python3-venv first
+   .venv/bin/pip install -r requirements.txt
+   .venv/bin/python rBrowser.py
+   ```
+
+   On Termux, `pkg install python-cryptography` first: pip then has
+   nothing to compile.
+
+3. **Start rBrowser:**
+   ```bash
+   python3 rBrowser.py [--host HOST] [--port PORT] [--log full|status] [--app]
+   ```
+   `python3 rBrowser.py --info` shows the state of the rBrowser already running here,
+   then follows its log (`--port N` for one on another port).
+   `--open LINK` opens a `nomadnetwork://` or `rrc://` link in the running rBrowser (starting it if needed);
+   `--register-links` / `--unregister-links` make those links open with rBrowser (Windows, Linux), then exit.
+
+4. **Open your web browser and navigate to:**
+   ```
+   http://localhost:PORT
+   ```
+   (Default port is 5000, default host is 0.0.0.0 if not specified)
+
+5. **Wait for node discovery:**
+
+   - The browser will start listening for NomadNetwork announces
+   - Discovered nodes will appear in the left sidebar
+   - Click on any node to browse its content and navigate pages
+   - or manually paste address in the bar without waiting for announces
+   - Check the status bar (top of the window, or bottom: Settings > System Setup) for the connection, the announces heard and CPU/RAM
+
+
+---
+
+## Install Option 2: Docker & Docker Compose
+
+**Quickest:** in the rBrowser folder
+
+```bash
+bash docker.sh          # installs Docker if missing (apt), builds and starts rBrowser
+bash docker.sh stop     # stops it (your data stays in the Docker volumes)
+```
+
+Then open http://localhost:5000. The steps below do the same by hand.
+
+- This repository includes a Dockerfile and a docker-compose.yaml so you can run rBrowser in a container.
+- The compose setup builds the image and exposes the web UI on port 5000.
+
+### Prerequisites
+
+#### Install Docker and Docker Compose
+
+```bash
+# Check if already installed
+
+docker --version
+docker-compose --version
+
+# If not installed on Debian/Ubuntu
+
+# Install Docker and Docker Compose (Debian 13, Raspberry Pi OS trixie, Ubuntu)
+
+sudo apt-get update
+sudo apt-get install docker.io docker-compose
+
+# The commands below are written "docker compose": with the docker-compose
+# package the same commands are "docker-compose" (with a dash)
+
+```
+
+Or by hand:
+
+### Quick Start (with Docker installed)
+
+```bash
+# Configure Docker User Permissions
+
+# Add current user to docker group (if not already present)
+sudo usermod -aG docker $USER
+
+# IMPORTANT: Log out and log back in for the group change to take effect
+
+# Clone repo
+git clone https://github.com/fr33n0w/rBrowser2
+
+# Enter root repo directory
+cd rBrowser2
+
+# Build and start in background
+docker compose up -d
+
+# Follow logs
+docker compose logs -f rbrowser
+
+
+# Useful Commands
+
+# Rebuild image and restart
+docker compose build --no-cache rbrowser
+docker compose up -d
+
+# Stop the container
+docker compose down
+
+# View running containers
+docker ps
+
+```
+
+Notes:
+- The Dockerfile copies a repository `config` file into the container at /home/appuser/.reticulum/config. Ensure you have a valid Reticulum config file named `config` in the repo root before building, or mount your config at runtime:
+  - Example volume override in docker-compose.yaml:
+    volumes:
+      - ./config:/home/appuser/.reticulum/config:ro
+- Use `docker compose ps` to check service and healthcheck status (compose file includes a basic HTTP healthcheck).
+- Stop and remove containers with `docker compose down`
+- Your identities, settings, visited pages and downloads live in Docker volumes (`rbrowser-identities`, `rbrowser-settings`, `rbrowser-cache`, `rbrowser-downloads`, `rbrowser-files`), so they survive rebuilds and `docker compose down`. Only `docker compose down -v` deletes them.
+- Your own identity file, cache and settings are never copied into the image (see `.dockerignore`).
+- Host and port of a container are set in `docker-compose.yaml`, not in the Settings page, and Restart / Shut down from the page are disabled: use `docker compose restart` / `docker compose stop`.
+
+At the end, open the rBrowser UI at http://localhost:5000 (or your configured port).
+
+## Install Option 3: Termux on Android
+
+You can run rBrowser directly on Android by using [Termux](https://termux.dev/), which gives you a full Linux environment. This keeps the Python code unchanged but lets you browse the UI from the same handset.
+
+1. **Install Termux**
+   - Install the latest Termux build from [F-Droid](https://f-droid.org/packages/com.termux/) (Play Store builds are outdated).
+   - Open Termux once so it completes its storage setup.
+
+2. **Get rBrowser and run the installer**
+   ```bash
+   pkg update && pkg upgrade
+   pkg install git
+   git clone https://github.com/fr33n0w/rBrowser2.git
+   cd rBrowser2
+   bash install.sh
+   ```
+   - It installs the Termux packages (Python, psutil, the prebuilt
+     `python-cryptography` and the build tools, in case pip still needs
+     them), the Python packages, and makes sure Reticulum reaches rmap.world (a basic config if
+     you have none, or rmap.world added or switched on in yours).
+   - Without git: download the zip of the release from GitHub, `unzip` it and run
+     `bash install.sh` in its folder.
+
+   <details><summary>By hand, without the installer</summary>
+
+   ```bash
+   pkg install python python-psutil python-cryptography git clang rust binutils make cmake pkg-config libffi openssl libsodium
+   git clone https://github.com/fr33n0w/rBrowser2.git
+   cd rBrowser2
+   pip install -r requirements.txt
+   mkdir -p ~/.reticulum && cp config ~/.reticulum/config   # only if you have no Reticulum config
+   ```
+   If pip still builds `cryptography` and stops with *Failed to determine
+   Android API level*, run `export ANDROID_API_LEVEL=$(getprop ro.build.version.sdk)`
+   and the pip line again.
+   </details>
+
+3. **Run rBrowser**
+   ```bash
+   python3 rBrowser.py --host 127.0.0.1 --port 5000
+   ```
+   - `127.0.0.1` keeps the web UI bound to the phone. Use `--host 0.0.0.0` if you want to reach it from another device on the same network.
+
+4. **Open the interface**
+   - In Android’s browser (Chrome, Firefox, etc.), visit `http://127.0.0.1:5000`.
+   - Keep Termux in the foreground or use `termux-wake-lock` + Android’s battery settings to prevent the OS from suspending the session.
+
+5. **Stopping**
+   - Press `Ctrl+C` in Termux to stop the server, then `termux-wake-unlock` if you enabled the wake lock.
+
+> **Tip:** For quicker restarts, create a small shell script in Termux (e.g., `~/start-rbrowser.sh`) that activates a virtual environment, runs rBrowser, and acquires the wake lock before launching.
+
+
+### Termux Troubleshooting
+
+- **“Permission denied / Address already in use” when starting Reticulum**
+  Reticulum tries to start a shared instance and bind the interfaces defined in `~/.reticulum/config`. On Android, the default Unix socket path (`/var/run/reticulum.sock`) is not writable, and a previous Reticulum session may still hold the network ports. Fix it by either:
+  1. Stopping any old process: `pkill -f reticulum` (run inside Termux); or
+  2. Editing your Reticulum config and disabling the shared instance (`share_instance = No`) or pointing `shared_path` to a writable directory inside Termux (e.g., `/data/data/com.termux/files/home/.reticulum/reticulum.sock`), and ensuring each `TCPServer`/`TCPClient` interface uses a free port.
+
+- **Shared instance already running but unreachable**
+  If you intentionally run `rnsd` in the background, keep it active and start rBrowser in the same session without killing it. Otherwise, stop the daemon before running rBrowser so it can bring up its own embedded Reticulum node.
+
+
+-----
+
 
 ## New in version 2.0+
 
@@ -129,8 +603,23 @@ back, a line in the terminal; with none of them up the status bar says
 "Reticulum interface disconnected" in red. An RNode on the air with no
 internet keeps Reticulum connected.
 
+**Autostart on boot.** Settings > System Setup, off by default. Switched on,
+rBrowser starts by itself with the computer, no admin rights: Windows at login
+(Startup folder); macOS at login (LaunchAgent); Linux at boot with cron, else
+a systemd user service, else the desktop autostart at login; Termux with the
+Termux:Boot app.
+Log of the last start in `settings/autostart.log`. The system service of the Linux
+installer shows here as on; `sudo systemctl disable rbrowser` turns it off.
+
+**Shortcuts.** Settings > System Setup, needs the app version (`--app`). An
+rBrowser2 icon on the desktop and in the app menu (Windows Start menu, Linux
+app menu; macOS desktop only) that opens rBrowser in its own window, or just a
+window if it is already running. To pin it to the Windows taskbar: right-click
+rBrowser2 in the Start menu > Pin to taskbar. Started from the icon there is
+no terminal: the log is in `settings/app.log`.
+
 **Internet check.** Settings > System Setup, off by default. When on, rBrowser
-checks every 15 seconds, with a
+checks every 30 seconds (you pick from 10 seconds to 24 hours), with a
 time server (NTP, one small UDP packet, the default: `pool.ntp.org`) or a
 connection to hosts you choose (nothing is sent), and says when the internet
 goes away and comes back: a line in the terminal, "No internet connection" in
@@ -144,7 +633,8 @@ run over Reticulum, which may also have radio links. Off, nothing is contacted.
 A change needs a restart: rBrowser offers to do it, restarts itself and the
 page reconnects on its own. Started in a terminal, it stays in that terminal
 after the restart, and Ctrl+C still stops it. Options typed on the command line still win when
-you start rBrowser by hand.
+you start rBrowser by hand. "rBrowser2 running on" (System Setup and About) lists the
+addresses to open it at: this device, the home network, the tunnel and the DDNS name.
 
 **Local network name.** In the same place, turn on a name like
 `rbrowser.local`: phones and computers on your home network open
@@ -185,7 +675,21 @@ the status and shortcut bars and NomadNet pages stay in Cascadia Mono.
 
 **Downloads and images.** File links with variables
 (`:/file/artifact`a=Manual.pdf`) and nodes that serve files only to
-identified users now work. Closing the download box cancels the transfer.
+identified users now work. Downloads share one panel, a row per file with
+the node it comes from, size, speed and time left; one file at a time per
+node, the rest wait in line. A slow transfer is never cut off while data
+keeps coming. The x cancels it; – reduces the panel to one line with the
+overall progress and an x that cancels them all.
+
+**File Downloads (Settings).** The download folder (Downloads/rBrowser by
+default), "Ask where to save" (off by default: files go straight into it,
+and a small button opens the file or its folder; on, in the app the save
+window opens there; a phone always saves on
+itself), and the files: NomadNet downloads and, apart,
+files received in LXMF chats, to open, show in their folder, save on the
+device you are on, or delete. Open and Show work only on the computer
+running rBrowser, and programs or scripts are never opened from here.
+Not for guests.
 Image sizes (`w=`, `h=`) are columns and rows, as in NomadNet.
 
 **Full screen and zoom.** The Full button shows only the page, with a one
@@ -200,7 +704,8 @@ blank. Shortcuts no longer fire while you type (Ctrl+X cuts again).
 Notifications stack instead of covering each other, and a page load says
 which node and page it was. The node list scrolls to the selected node. On
 phones the nav bar is two rows, buttons and address bar, and nothing runs
-off the screen.
+off the screen. A phone turned sideways keeps the phone layout; in RRC the
+room name and buttons share one row, so the chat keeps its room.
 
 **Brackets in pages.** The Micron parser shared with MeshChat took any
 `[...]` as a link, even without the backtick in front. Pages that forgot it
@@ -256,6 +761,8 @@ works on pages with long paragraphs or dividers. The reload button spins
 while a page loads. A **screenshot** button (nav bar, and the full screen
 bar) saves the whole page as a PNG. Settings > Screenshots turns it off and
 sets the quality, one for desktop (Medium) and one for phones (Low, faster).
+With "Ask where to save" off (Settings > File Downloads) it goes into the
+download folder, with the buttons to open it or show it in its folder.
 New tabs open at the end of the pages, before the "+"; then come the app
 tabs (Messages, RRC, BBS, RMAP) and, on desktop, a ⚙ that opens Settings.
 With many tabs open, scroll the row with the mouse wheel or drag it sideways.
@@ -443,7 +950,7 @@ favourite hubs at start", on by default); "Connect to all favourite hubs at
 start" (off by default) connects every one. Each hub has its window
 (notices, MOTD, errors) and one tab per room; on the right the people in the
 room. Commands: /join room [key], /part, /me, /nick (per hub), /ping,
-/clear, /quit, /help; everything else starting with / goes to the hub as
+/clear, /quit, /help, /unban [room] nick|hash, /unkline nick|hash (a nick with spaces too); everything else starting with / goes to the hub as
 typed (/list, /who room, /topic room text, /mode room +o nick...).
 Shift+Enter starts a new line in the message (the field grows up to six lines);
 on a touch screen Enter is the new line and the green arrow sends.
@@ -472,7 +979,16 @@ Right-click on a tab (or ⋯ in the head): the room's menu (who, topic, ban
 list, room link, part; for operators topic, modes, key, register, invite,
 unban) or the hub's (rooms, join, ping, nick, copy addresses, the colours'
 legend, connect; for server operators stats, K-lines, reload). The head
-shows your identity hash beside your nick. ☺ opens the emoji. Every message
+shows your identity hash beside your nick. ☺ opens the emoji, ten a page: the first page is
+the ones you use most, then faces, hands, hearts and the other groups. 🎨 gives your
+messages a colour, a background, bold, italic, underline or an effect (rainbow, fire,
+ocean... 16 of them; by letter, word or gradient), in three tabs: Colours, Presets (text and
+background in one tap) and Effects: left click a colour for the text, right click
+(long press on a phone) for the background; it stays on until Reset. Select a word in the
+box and a small bar (B I U 🎨 ⌀) colours only that part; the box shows the message as it will look. Only rBrowser shows
+them, the other clients get the plain text ("Show colours from others" in Settings >
+RRC Client turns them off). "Chat text size" there makes the chat larger (11-24 px,
+default 13). Every message
 shows its time and nick (bold), also several in a row from the same person,
 with a bar in the speaker's colour; yellow when it names you. In the rooms
 timestamps can be short (hh:mm) or hidden, apart on a computer and on a phone
@@ -492,7 +1008,8 @@ if chosen); "Back from away message" says `/me is back` (or your text) when
 away ends. Both go out a second or two after the change. "Away nick": another nick
 while away (`{nick}|Away` by default, `{nick}` = your usual one), seen by the others from
 your next message; mentions of the usual nick still count. The moon next to AutoReply
-(RRC and LXMF) switches away on/off with one click.
+(RRC and LXMF) switches away on/off with one click. In RRC the speaker after it
+turns the RRC sounds off and on at once (popups stay; the other sounds are in Settings).
 Right-click on a message (long press on a phone): Reply puts `> nick: text` in the box, you write the answer under it
 (rBrowser shows the quote apart, other clients the plain text). "Where": every
 room, or only the rooms switched on from the AutoReply menu while in them.
@@ -505,7 +1022,7 @@ chat: names you, messages (who and where only, never the text), hub events
 Your nick on a hub: the one set for that hub (/nick, the Nick button, or
 Settings > RRC Client > Saved hubs, which lists every hub you have been on with its
 identity and nick), else the Default nick if its switch is on ("Anonymous
-Peer", off at first), else none and the hub shows your identity hash. Cut to
+Peer rB2", on at first), else none and the hub shows your identity hash. Cut to
 the hub's limit (32 bytes on rrcd). The hub keeps no nicks: it reads it from
 your next message. On connect the hub tab says the identity and the nick in
 use, and where the nick comes from; the head shows it too.
@@ -513,6 +1030,8 @@ A connection that fails says why: the link did not open (lost on the way, or
 the hub busy), the hub closed it, it timed out, or the hub's own refusal
 ("banned"). On exit and on Restart rBrowser closes its links properly, so the
 hub drops the session at once and the next connect is not refused.
+A link that never opened drops the path to the hub and asks for a new one
+before the next try, so a dead route does not hold it back.
 A hub silent for 60 s gets a quiet ping; no answer in 30 s and the link is
 taken as dead (a hub restarted under you): rBrowser reconnects and joins
 your rooms again. The answers to /who and /list, and other long answers
@@ -566,8 +1085,10 @@ too. With the password on, every page and call needs it (the session lasts
 on this computer too" is on. Requests through a tunnel or a reverse proxy on
 this computer are recognised by their proxy header and always asked (with
 the password off they are refused). Only a salted PBKDF2 hash is kept
-(settings/auth.json); a change needs the current password and logs every
-other browser out; 5 wrong passwords lock that address out for 5 minutes.
+(settings/auth.json); every change (the switches, Change password) asks for
+the current password in a popup, applies at once and logs every other
+browser out; 5 wrong passwords lock that address out for 5 minutes. While
+the Remote access tunnel is on, the password cannot be switched off.
 Forgot it: stop rBrowser and delete settings/auth.json.
 
 **Remote access** (Settings > System Setup). Switch it on and rBrowser gives you an
@@ -576,7 +1097,7 @@ Cloudflare quick tunnel (`cloudflared`, downloaded once into `bin/`, no
 account). The link changes each time the tunnel starts. It needs the access
 password on, and goes off if you switch the password off. Cloudflare carries
 the traffic. **Dynamic DNS** is there for who opened a port by hand: a free
-name (afraid.org, DuckDNS or dynv6) kept pointed at your public IP. On
+name (afraid.org/FreeDNS, DuckDNS or dynv6) kept pointed at your public IP. On
 afraid.org pick a domain run by afraid itself (mooo.com, chickenkiller.com,
 strangled.net...): other people's public domains can expire ("Broken").
 
@@ -829,7 +1350,7 @@ computes whatever the recipient asks.
 
 **Check for updates.** Settings > About: "Check for updates at start" (on by
 default) reads version.txt on github.com/fr33n0w/rBrowser2; a newer version puts
-a green dot on About, with the link, the command (`git pull`) and what is new
+a green dot on About and an orange "New update!" button in the top bar, with the link, the command (`git pull`) and what is new
 (the entries of [CHANGELOG.md](CHANGELOG.md) after your version). "Check now"
 asks at once. "Auto-check every" (on by default, 1 to 12 hours, 6 by
 default) asks again while the page stays open, so a tab left open for days
@@ -929,448 +1450,6 @@ personal, no fame or anything else. If it is not welcome, just say so and the
 repository will be taken down from public view.
 
 ---
-
-# Overview
-
-# rBrowser v2.0:
-
-**rBrowser** is a cross-platform, standalone, web-based client for the Reticulum
-network: one web interface, on your PC or on your phone, for the main things you
-do on Reticulum.
-
-- **NomadNet browser**: finds nodes from their announces as they come in and
-  renders their Micron pages the way NomadNet does - address bar, tabs, history,
-  favourites, forms, file downloads, a page cache and a local (no-crawler) search engine.
-- **LXMF messenger**: chats with any LXMF client (Sideband, NomadNet, MeshChat...),
-  multi-identities support, attachments, images, audio files and voice messages, propagation nodes supporting discovery and auto-connect / autocycle if one is unreachable,
-  stamps, automatic replies to keyword, away and echobot messages.
-- **RRC chat**: IRC-style rooms on Reticulum Relay Chat hubs, with several hubs and
-  rooms at once, users, operators, mentions and notifications, automatic replies to keyword, away and echobot messages as for the lxmf messenger.
-- **BBS client**: RetiBBS boards over Reticulum, with a terminal-style screen, with nomadnet bbs discovery and compatible with my upcoming BBS project.
-- **RMAP**: the map of the network from rmap.world, to discover NomadNet nodes,
-  propagation nodes, RRC hubs, BBS servers and entry points, and open them in one click.
-
-Everything runs locally: the interface is served by a small web server (default
-host 0.0.0.0, port 5000, both configurable), so it opens in any browser, on the
-same machine or from a phone on your network. Each client can be switched on or
-off in Settings: at first only the NomadNet browser is on.
-
-It also runs well on a remote machine (a Raspberry Pi at home, a server):
-- **Remote access**: a built-in Cloudflare reverse tunnel reaches it from anywhere,
-  with no ports to open on the router, behind an access password;
-- **DDNS**: the built-in dynamic DNS client gives it a host name, so you reach it by
-  name instead of by IP;
-- **Guest mode**: a second password lets other people use it if enabled: they browse NomadNet
-  and, if you allow it, chat on RRC and BBS or use the LXMF messenger, while main admin
-  settings, identities and private keys stay yours.
-
------
-
-## Table of Contents
-
-* [Overview](#overview)
-  * [Features](#features)
-* [Requirements](#requirements)
-  * [System Requirements](#system-requirements)
-  * [Python Dependencies](#python-dependencies-included-in-requirementstxt)
-* [Installation](#installation)
-  * [Quick start](#quick-start)
-  * [Install Option 1: Run from Terminal](#install-option-1-run-from-terminal)
-  * [Install Option 2: Docker & Docker Compose](#install-option-2-docker--docker-compose)
-  * [Install Option 3: Termux on Android](#install-option-3-termux-on-android)
-* [Usage](#usage)
-  * [Addresses and links](#addresses-and-links)
-  * [Navigation](#navigation)
-* [Next Implementations](#next-implementations)
-* [Known Issues](#known-issues)
-* [Bug or Issues Report](#bug-or-issues-report)
-* [Development Notes](#development-notes)
-* [Troubleshooting](#troubleshooting)
-* [Traffic Usage Warning](#traffic-usage-warning)
-* [License](#license)
-* [Contributing](#contributing)
-* [External Dependencies](#external-dependencies)
-* [Screenshots](#screenshots)
-
------
-
-## Features:
-
-- **Real-time Node Discovery**: Detects and lists NomadNetwork nodes as they announce on the network
-- **Web-based Interface**: Modern, responsive browser interface accessible at `localhost:5000`
-- **Micron Parser**: Renders NomadNet's Micron markup language with proper formatting and styling
-- **URL Navigation**: Address bar with back/forward navigation and manual URL input
-- **Dual View Modes**: Toggle between Rendered Micron content and Raw page view
-- **Link Navigation**: Click on links within Micron content to navigate between pages
-- **Status Bar**: One line across the window, whatever client is open (top by default, or bottom: Settings > System Setup): connection, then icons for all the announces, NomadNet nodes and, for the clients that are on, LXMF peers, propagation nodes, RRC hubs, BBS servers and RMAP nodes (heard live since start; the tooltip adds what Reticulum remembers), CPU and RAM and a clock at the right end
-- **File Download Support**: Download files hosted on nomadnet nodes
-- **Add To Favorites**: Favorite system with star button synched across the whole UI tabs
-- ℹ **Node Info**: Extended node info for remote node hosting page in the node list
-- **Fingerprint**: Allow to identify with identity and LXMF address to remote host with a button
-- **Identities**: Several identities (one per account), an ephemeral throwaway identity, per-node auto-identify; the identity button in the page bar drops a menu to browse as another one (new ephemeral, copy the hash, settings)
-- **Custom address generator**: Identities whose LXMF address starts with characters you choose (vanity address), searched in the background
-- **Web server settings**: Host and port editable in Settings, with automatic restart
-- **Inline Images**: Renders images embedded in Micron pages, fetched over the node's `/media` handler
-- **Page Partials**: Self-refreshing regions of a page, as served by NomadNet 1.4.x
-- **Tables & Folds**: Micron tables and collapsible sections are rendered properly
-- **Colours**: 24-bit colours (`` `FTrrggbb ``, `` `BTrrggbb ``) and the page's own background and text colour (`#!bg=`, `#!fg=`), as NomadNet
-- **Page Status**: LIVE / CACHE / OFFLINE COPY label by the address bar; the cache follows the node's `#!c=` like NomadNet
-- **Page Screenshot**: The whole page saved as a PNG
-- **Node List**: Hops, your visits and saved pages on each card; sort by most visited; holds still under the pointer; menu on right-click or long press; hide nodes
-- **History**: Pages you opened, beside Favorites, with size and age limits in Settings
-- **Enter to Send**: Enter in a page's text field presses its send link (Ctrl+Enter in multi-line fields)
-- **Search**: Node list, favorites and saved pages from the sidebar, with suggestions in the address bar
-- **Request Path**: Forget the path to a node and ask for a new one; Check path shows the one held
-- **Messages (LXMF)**: Messenger tab with direct delivery, identity of your choice, announces at start and on a timer
-- **Propagation nodes**: Found from announces, nearest or chosen; failed direct messages are left there, Sync now and on a timer; a node that does not answer is set aside and the next one used; optional rotation
-- **Files and images in messages**: Paperclip, drag & drop or paste; Sideband-compatible; received files in `downloads/`
-- **Voice messages**: Sideband voice messages (Opus, Codec2) and audio files play in the chat
-- **Reactions, markdown, nicknames**: LXMF reactions, markdown messages (switchable), names of your own for contacts
-- **Message search**: Every conversation, from the Messages tab
-- **Link menu**: Right-click a link in a page for what fits its kind (page, file, form, LXMF, RRC, web)
-- **RRC chat**: IRC-style rooms on RRC hubs (client v2, simple, follows rrcd 0.3.2 and NomadNet), room tabs, users, mentions
-- **RMAP**: The nodes rmap.world hears, on a map and in lists by kind, each one a click from use
-- **Favourite contacts**: Starred conversations first in Messages
-- **Light rendering**: Long pages drawn as plain monospace text, about ten times faster
-- **Stamps for incoming messages**: Anti-spam cost in your announce, tickets for your contacts
-- **Local network name**: `rbrowser.local` via mDNS, optional
-- **System links**: `nomadnetwork://` and `rbrowser://` links open in the rBrowser that is running (Windows, Linux)
-- **Settings in categories**: Search, one Save for all (the dialog stays open; Close, x or Esc close it), unsaved-changes and restart-needed warnings
-- **Restart and Shut down**: Two buttons at the foot of the Settings categories, each asks first (not shown to guests)
-- **Contact colours**: Pick a contact's colour with a preview; click the logo for its info
-- **Recent nodes at start**: Optional, from Reticulum's known announces, marked until they announce again
-- **Screenshot settings**: On/off, quality for desktop and mobile
-- **Advanced options**: Unlocked by tapping the version seven times; ephemeral identity messages with limits
-- **Responsive Fit**: Text at full size on any screen, only too-wide ASCII art shrinks; measured on the device, so pages fit on real phones too
-- ⏱ **Adaptive Timeouts**: Waits as long as the path actually needs instead of a fixed clock, so slow LoRa nodes are not declared dead
-- **Notifications & Logs**: Notifications in the web UI; the terminal shows only the kinds of line you choose in Settings
-- **BBS client**: RetiBBS boards over Reticulum, several at once, terminal-style screen
-- **Automatic replies**: Keywords, away message and echo, for LXMF and RRC
-- **Remote access & DDNS**: Cloudflare tunnel to reach it from anywhere, dynamic DNS for a host name, access password
-- **Guest mode**: A second password for other people; settings, identities and keys stay yours
-- **One-click install**: `install.sh`, `install.bat` and `docker.sh` set up the packages and Reticulum
-- **And more......**: Download rBrowser and try it now!!
-
-## Requirements
-
-### System Requirements
-
-- **Python**: 3.9 or higher, with pip
-- **Operating System**: Linux, macOS, or Windows (see Tested on, below)
-- **Network**: Access to a Reticulum network (radio interfaces, internet gateways, or local testnet)
-
-### Tested on
-
-| Where | Status |
-|---|---|
-| Windows 10 (Python 3.12) | tested: everyday development machine |
-| Raspberry Pi Zero 2 W, Raspberry Pi OS 13 trixie (Python 3.13, RNS 1.5.7) | tested |
-| Docker on Raspberry Pi Zero 2 W (docker.io 26, compose 2.26) | tested: builds in about 9 minutes, image 271 MB, runs in 512 MB of RAM (uses swap) |
-| Linux Mint 21 (Python 3.12.3) | tested: installed with install.sh |
-| Android, Termux 0.118.0 (Python 3.14) | tested: installed with install.sh |
-| Debian 13, in a venv (install.sh option 1, or a venv of your own) | tested on the Raspberry Pi |
-| Browsers: Chrome desktop, Chrome on Android (phone layout) | tested |
-| macOS | not tested (no Mac available): it should work as on Linux, reports welcome |
-| Other Linux desktops | not tested yet: same code as the Pi |
-
-### Python Dependencies (included in requirements.txt)
-
-`pip install -r requirements.txt` (or the installer) puts in all of them:
-
-| Package | What rBrowser uses it for |
-|---|---|
-| `rns` >= 1.0.0 | Reticulum itself: the connection to the network, the announces of the nodes, the pages and files fetched from them. It also brings `rnsd`, `rnstatus` and the other Reticulum tools |
-| `lxmf` >= 1.2.0 | LXMF messages: the Messages tab, propagation nodes, stamps |
-| `flask` >= 2.0.0 | The web interface: the pages and calls behind what you see in the browser |
-| `waitress` >= 2.1.2 | The web server that serves that interface, to this machine and, if you want, to your phone |
-| `zeroconf` >= 0.130.0 | The `rbrowser.local` name on your network, so phones find it without an IP |
-| `psutil` >= 5.9.0 | rBrowser's CPU and RAM in the status bar and in Settings > About (without it, Linux and Android read them from /proc) |
-
-Optional, not in requirements.txt: `pycodec2` or `ffmpeg` on the PATH (to play Codec2 voice messages).
-
-
------
-
-## Installation
-
-### Quick start
-
-**First time with Reticulum?** Use the installer, inside the rBrowser folder:
-
-| System | Run |
-|---|---|
-| Linux, Raspberry Pi, macOS, Android (Termux) | `bash install.sh` |
-| Windows | double-click `install.bat` (or run it in cmd) |
-| Docker (Linux, Pi) | `bash docker.sh` (`bash docker.sh stop` to stop it) |
-
-The installer:
-
-- installs the Python packages of `requirements.txt`. In a venv you have
-  activated, it installs there. On Debian 12+, Ubuntu
-  and Pi OS it asks where: a venv in this folder (`.venv`, then start with
-  `.venv/bin/python rBrowser.py`) or your user with
-  `--break-system-packages`, the way the Reticulum manual does. On Termux it
-  takes the prebuilt `python-cryptography`, nothing to compile;
-- makes sure Reticulum reaches rmap.world (`rns_setup.py`): with no config
-  it writes a basic one (a BackboneInterface on Linux and Android, a
-  TCPClientInterface on Windows and macOS); in yours it asks to add
-  rmap.world if missing, or to switch it on if it is there with
-  `enabled = no`. The other interfaces stay as they are, and the old file
-  is kept as `config.before-rbrowser`;
-- puts `rnsd`, `rnstatus` and the other Reticulum programs on your PATH if
-  they are not there (usual on a Raspberry Pi);
-- on Linux, asks whether to start rBrowser as a system service at every boot;
-- leaves everything in this folder, and at the end tells you how to start it.
-
-**Reticulum already set up?** No installer needed: in the rBrowser folder
-
-```bash
-pip install -r requirements.txt
-python3 rBrowser.py          # Windows: python rBrowser.py
-```
-
-(Debian 12+ and Pi OS: `pip install --user --break-system-packages -r requirements.txt`, or a venv, see below.)
-
-Then open `http://localhost:5000`. Details for each option below.
-
-**Servers.** Port 4343 of rmap.world is the same server and less crowded.
-Add more than one server to your Reticulum config, so you stay connected
-when one is down: you find them on [rmap.world](https://rmap.world) and in
-rBrowser's own RMAP client.
-
-**First start.** Only the NomadNet browser is on: it listens for announces
-straight away. The LXMF messenger, the RRC chat, the BBS client and RMAP are
-off: switch on the ones you want in Settings, after setting your own
-preferences there (your name, your nick and the rest).
-
-
-## Install Option 1: Run from terminal
-
-1. **Clone the repository:**
-
-   ```bash
-   git clone https://github.com/fr33n0w/rBrowser2.git
-   cd rBrowser2
-   ```
-
-2. **Run the installer** (recommended, above all the first time):
-
-   ```bash
-   bash install.sh          # Linux, Raspberry Pi, macOS, Termux
-   install.bat              # Windows (or double-click it)
-   ```
-
-   It installs the Python packages, makes sure Reticulum reaches rmap.world
-   (writes a basic config if you have none, or offers to add or switch on
-   rmap.world in yours), puts `rnsd` & co. on your PATH and, on Linux, asks
-   whether to start rBrowser as a system service. Everything stays in this
-   folder. Then go to step 3.
-
-   **Or by hand**, if Reticulum is already set up:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-   On Debian 12+, Ubuntu 23.04+ and Raspberry Pi OS (Bookworm, Trixie) pip
-   refuses with *externally-managed-environment*. Install for your user,
-   the same way the Reticulum manual installs `rns` there:
-
-   ```bash
-   pip install --user --break-system-packages -r requirements.txt
-   ```
-
-   The programs pip installs (`rnsd`, `rnstatus`, `nomadnet`...) go to
-   `~/.local/bin`: if the shell does not find them, open a new terminal or
-   add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc`.
-
-   Not allowed to use `--break-system-packages` (a work PC, say)? A venv:
-
-   ```bash
-   python3 -m venv .venv          # Debian: sudo apt install python3-venv first
-   .venv/bin/pip install -r requirements.txt
-   .venv/bin/python rBrowser.py
-   ```
-
-   On Termux, `pkg install python-cryptography` first: pip then has
-   nothing to compile.
-
-3. **Start rBrowser:**
-   ```bash
-   python3 rBrowser.py [--host HOST] [--port PORT] [--log full|status]
-   ```
-
-4. **Open your web browser and navigate to:**
-   ```
-   http://localhost:PORT
-   ```
-   (Default port is 5000, default host is 0.0.0.0 if not specified)
-
-5. **Wait for node discovery:**
-
-   - The browser will start listening for NomadNetwork announces
-   - Discovered nodes will appear in the left sidebar
-   - Click on any node to browse its content and navigate pages
-   - or manually paste address in the bar without waiting for announces
-   - Check the status bar (top of the window, or bottom: Settings > System Setup) for the connection, the announces heard and CPU/RAM
-
-
----
-
-## Install Option 2: Docker & Docker Compose
-
-**Quickest:** in the rBrowser folder
-
-```bash
-bash docker.sh          # installs Docker if missing (apt), builds and starts rBrowser
-bash docker.sh stop     # stops it (your data stays in the Docker volumes)
-```
-
-Then open http://localhost:5000. The steps below do the same by hand.
-
-- This repository includes a Dockerfile and a docker-compose.yaml so you can run rBrowser in a container.
-- The compose setup builds the image and exposes the web UI on port 5000.
-
-### Prerequisites
-
-#### Install Docker and Docker Compose
-
-```bash
-# Check if already installed
-
-docker --version
-docker-compose --version
-
-# If not installed on Debian/Ubuntu
-
-# Install Docker and Docker Compose (Debian 13, Raspberry Pi OS trixie, Ubuntu)
-
-sudo apt-get update
-sudo apt-get install docker.io docker-compose
-
-# The commands below are written "docker compose": with the docker-compose
-# package the same commands are "docker-compose" (with a dash)
-
-```
-
-Or by hand:
-
-### Quick Start (with Docker installed)
-
-```bash
-# Configure Docker User Permissions
-
-# Add current user to docker group (if not already present)
-sudo usermod -aG docker $USER
-
-# IMPORTANT: Log out and log back in for the group change to take effect
-
-# Clone repo
-git clone https://github.com/fr33n0w/rBrowser2
-
-# Enter root repo directory
-cd rBrowser2
-
-# Build and start in background
-docker compose up -d
-
-# Follow logs
-docker compose logs -f rbrowser
-
-
-# Useful Commands
-
-# Rebuild image and restart
-docker compose build --no-cache rbrowser
-docker compose up -d
-
-# Stop the container
-docker compose down
-
-# View running containers
-docker ps
-
-```
-
-Notes:
-- The Dockerfile copies a repository `config` file into the container at /home/appuser/.reticulum/config. Ensure you have a valid Reticulum config file named `config` in the repo root before building, or mount your config at runtime:
-  - Example volume override in docker-compose.yaml:
-    volumes:
-      - ./config:/home/appuser/.reticulum/config:ro
-- Use `docker compose ps` to check service and healthcheck status (compose file includes a basic HTTP healthcheck).
-- Stop and remove containers with `docker compose down`
-- Your identities, settings and visited pages live in three Docker volumes (`rbrowser-identities`, `rbrowser-settings`, `rbrowser-cache`), so they survive rebuilds and `docker compose down`. Only `docker compose down -v` deletes them.
-- Your own identity file, cache and settings are never copied into the image (see `.dockerignore`).
-- Host and port of a container are set in `docker-compose.yaml`, not in the Settings page, and Restart / Shut down from the page are disabled: use `docker compose restart` / `docker compose stop`.
-
-At the end, open the rBrowser UI at http://localhost:5000 (or your configured port).
-
-## Install Option 3: Termux on Android
-
-You can run rBrowser directly on Android by using [Termux](https://termux.dev/), which gives you a full Linux environment. This keeps the Python code unchanged but lets you browse the UI from the same handset.
-
-1. **Install Termux**
-   - Install the latest Termux build from [F-Droid](https://f-droid.org/packages/com.termux/) (Play Store builds are outdated).
-   - Open Termux once so it completes its storage setup.
-
-2. **Get rBrowser and run the installer**
-   ```bash
-   pkg update && pkg upgrade
-   pkg install git
-   git clone https://github.com/fr33n0w/rBrowser2.git
-   cd rBrowser2
-   bash install.sh
-   ```
-   - It installs the Termux packages (Python, psutil, the prebuilt
-     `python-cryptography` and the build tools, in case pip still needs
-     them), the Python packages, and makes sure Reticulum reaches rmap.world (a basic config if
-     you have none, or rmap.world added or switched on in yours).
-   - Without git: download the zip of the release from GitHub, `unzip` it and run
-     `bash install.sh` in its folder.
-
-   <details><summary>By hand, without the installer</summary>
-
-   ```bash
-   pkg install python python-psutil python-cryptography git clang rust binutils make cmake pkg-config libffi openssl libsodium
-   git clone https://github.com/fr33n0w/rBrowser2.git
-   cd rBrowser2
-   pip install -r requirements.txt
-   mkdir -p ~/.reticulum && cp config ~/.reticulum/config   # only if you have no Reticulum config
-   ```
-   If pip still builds `cryptography` and stops with *Failed to determine
-   Android API level*, run `export ANDROID_API_LEVEL=$(getprop ro.build.version.sdk)`
-   and the pip line again.
-   </details>
-
-3. **Run rBrowser**
-   ```bash
-   python3 rBrowser.py --host 127.0.0.1 --port 5000
-   ```
-   - `127.0.0.1` keeps the web UI bound to the phone. Use `--host 0.0.0.0` if you want to reach it from another device on the same network.
-
-4. **Open the interface**
-   - In Android’s browser (Chrome, Firefox, etc.), visit `http://127.0.0.1:5000`.
-   - Keep Termux in the foreground or use `termux-wake-lock` + Android’s battery settings to prevent the OS from suspending the session.
-
-5. **Stopping**
-   - Press `Ctrl+C` in Termux to stop the server, then `termux-wake-unlock` if you enabled the wake lock.
-
-> **Tip:** For quicker restarts, create a small shell script in Termux (e.g., `~/start-rbrowser.sh`) that activates a virtual environment, runs rBrowser, and acquires the wake lock before launching.
-
-
-### Termux Troubleshooting
-
-- **“Permission denied / Address already in use” when starting Reticulum**
-  Reticulum tries to start a shared instance and bind the interfaces defined in `~/.reticulum/config`. On Android, the default Unix socket path (`/var/run/reticulum.sock`) is not writable, and a previous Reticulum session may still hold the network ports. Fix it by either:
-  1. Stopping any old process: `pkill -f reticulum` (run inside Termux); or
-  2. Editing your Reticulum config and disabling the shared instance (`share_instance = No`) or pointing `shared_path` to a writable directory inside Termux (e.g., `/data/data/com.termux/files/home/.reticulum/reticulum.sock`), and ensuring each `TCPServer`/`TCPClient` interface uses a free port.
-
-- **Shared instance already running but unreachable**
-  If you intentionally run `rnsd` in the background, keep it active and start rBrowser in the same session without killing it. Otherwise, stop the daemon before running rBrowser so it can bring up its own embedded Reticulum node.
-
-
------
-
 
 ## Usage
 
@@ -1481,6 +1560,17 @@ it's optimized to avoid problems so they should not occur in normal usage.
   own Reticulum with the same settings; close it, or let rBrowser use the running `rnsd`
 - Reticulum errors in the terminal: check the interfaces in `~/.reticulum/config`
 
+**rnsd under another user** ("digest sent was rejected", "rnsd runs under another user"):
+`rnsd` answers only programs with its key, so rBrowser started by a different user
+(a system `rnsd` service, a test account) runs without Reticulum. As the user of `rnsd`:
+
+```
+python3 -c "import RNS, os; print(RNS.Identity.full_hash(RNS.Identity.from_file(os.path.expanduser('~/.reticulum/storage/transport_identity')).get_private_key()).hex())"
+```
+
+then in `~/.reticulum/config` of rBrowser's user, under `[reticulum]`, add `rpc_key = <that key>`
+and restart rBrowser. The key gives control of `rnsd`: keep it private.
+
 -----
 
 ## Traffic Usage:
@@ -1523,6 +1613,7 @@ Bundled in the repository, so rBrowser works without fetching anything from a CD
 | Natural Earth 1:50m borders (`script/leaflet/countries.json`) | the offline RMAP map | public domain |
 | Cascadia Mono (`templates/fonts/`) | the Micron page font: its cell matches NomadNet's proportions | SIL OFL 1.1 |
 | Inter (`templates/fonts/`) | the interface font | SIL OFL 1.1 |
+| Twemoji Country Flags (`templates/fonts/`, from country-flag-emoji-polyfill) | flag emoji where the system has none (Windows) | MIT / CC-BY 4.0 (Twemoji) |
 | Material Design Icons (`templates/fonts/`) | interface icons | Pictogrammers Free License |
 | fingerprint, go, ping, star, info icons | page bar buttons | flaticon.com |
 
