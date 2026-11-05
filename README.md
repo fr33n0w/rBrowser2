@@ -1,3 +1,5 @@
+<p align="center"><img src="templates/logo-256.png" alt="rBrowser2 logo" width="160"></p>
+
 # rBrowser2: Standalone Reticulum Browser
 
 A modern, web-based UI for exploring NomadNet nodes and pages over the Reticulum network, with LXMF, RRC, BBS Clients and integrated RMAP.WORLD support for external nodes discovery.
