@@ -9,9 +9,11 @@ Everything that changed in each version, in full. The short list is in
 
 - **App window** - `python3 rBrowser.py --app` opens rBrowser in a window of its own (pywebview), with a splash screen and the new logo. Phones and other computers still reach it in their browser.
 - **Reload button** - at the foot of the Settings categories, next to Restart and Shut down: reloads the page. The app window has no F5 or Ctrl+R.
+- **Desktop and menu shortcuts** - Settings > System Setup, with the app version: an rBrowser2 icon on the desktop and in the app menu (Windows Start menu, Linux app menu; macOS desktop only) that opens rBrowser in its own window.
 - **Autostart on boot** - Settings > System Setup, off by default: starts rBrowser when the computer starts (Windows, Linux, Raspberry Pi; macOS not tried on a real Mac yet).
 - **Downloads** - files from the same node wait in line, files from different nodes come at the same time; each row shows speed and time left, the panel shrinks to one line.
 - **File Downloads settings** - the download folder, "Ask where to save" and the list of downloaded and received files, to open, show or delete. With "Ask where to save" off the file goes straight into the folder and a small button stays at the bottom right: the name opens the file, the folder icon shows it in its folder, x closes it (on the computer running rBrowser).
+- **Screenshots** - with "Ask where to save" off they go into the File Downloads folder too, with the same small button.
 - **Battery** - the status bar shows the battery of the computer running rBrowser; opened from another device (a phone through the tunnel), the battery of that device where its browser tells it (Chrome and Edge), otherwise none.
 - **Flag emoji on Windows** - Windows has no flag glyphs, so Chrome, Edge and the app window showed "IT" for 🇮🇹. rBrowser now loads the Twemoji flags (78 KB, bundled, no internet needed) only where they are missing; Firefox, phones and Macs keep their own.
 - **RRC** - colours and effects in the chat, chat text size, emoji pages, `/unban` and `/unkline`, and a speaker button after the away moon that turns the RRC sounds off and on at once (popups stay).
@@ -27,10 +29,14 @@ Everything that changed in each version, in full. The short list is in
 
 - The RRC Default nick is on by default.
 - The short status bar is shorter still.
+- A phone turned sideways keeps the phone layout (it took the desktop one).
 
 ### Fixed
 
 - Form fields named `name`, `title`, `action` and a few more lost their name (DOMPurify's DOM clobbering guard), so the node received them empty: a guestbook signed "Anonymous" whatever you wrote. They keep it now.
+- Docker: LXMF switched on from Settings never started; downloads (LXMF and NomadNet) now have their own volumes.
+- Phones: with the keyboard open the page took the landscape layout and the address bar moved while typing.
+- RRC: a hub whose path had died was retried on the same dead path; the retry now asks the network for a new one.
 - An `rnsd` started by another user refuses rBrowser ("digest sent was rejected"): the terminal and the status bar now say so, with the command for its `rpc_key` (README, Troubleshooting).
 
 ## 2.0.5b - 2026-10-29
