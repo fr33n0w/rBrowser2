@@ -10929,8 +10929,36 @@ body.sidebar-collapsed .sidebar-toggle-btn {
 }
 
 /* ...but one with its own style as the others see it, its bold included. */
-.rrc-line.rrc-own .rrc-text .rrc-fmt {
+.rrc-line.rrc-own .rrc-text .rrc-fmt,
+.rrc-line.rrc-own .rrc-text .rrc-art {
     font-weight: 400;
+}
+
+/* Micron with colours (rrcMicronHtml): every space kept, no wrapping, cut
+   at the edge of the chat, rows close enough for block characters to meet. */
+.rrc-art {
+    display: block;
+    white-space: pre;
+    overflow: hidden;
+}
+
+/* Its whole line as tall as the art's rows, and art sent a line per message
+   with no gap between the rows. */
+.rrc-line:has(.rrc-art) {
+    line-height: 1.2;
+    /* Whole pixels: a fractional row leaves a hairline seam between rows. */
+    line-height: round(up, 1.2em, 1px);
+}
+
+.rrc-line:has(.rrc-art) + .rrc-line:has(.rrc-art) {
+    margin-top: 0;
+}
+
+/* A background fills the whole row, not just the font's height, as the
+   Micron page renderer does: no dark line between the rows. */
+.rrc-art .rrc-mc {
+    display: inline-block;
+    vertical-align: top;
 }
 
 /* @ and + before a nick, as in mIRC. */

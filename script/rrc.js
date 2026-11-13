@@ -999,7 +999,8 @@ function rrcLineEl(line, pane, me) {
     } else if (line.kind === 'notice') {
         // From a person: "Notice: text (by nick)", the nick only here (other
         // clients show notices with no sender); from the hub: ℹ text.
-        div.innerHTML = line.src ? `${ts}<span class="rrc-text">Notice: ${rrcText(line.text)} (by ${nickHtml})</span>` : sign(rrcSign('info'));
+        div.innerHTML = line.src ? `${ts}<span class="rrc-text">Notice: ${rrcNoticeHtml(line.text)} (by ${nickHtml})</span>`
+            : `${ts}<span class="rrc-sign">${rrcSign('info')}</span><span class="rrc-text">${rrcNoticeHtml(line.text)}</span>`;
     } else if (line.kind === 'error') {
         div.innerHTML = sign(rrcSign('error'));
     } else if (line.kind === 'join' || line.kind === 'part') {
@@ -2702,9 +2703,118 @@ function rrcFmtHtml(text, fmt) {
     return html;
 }
 
+// Micron in a message, as NomadNet's chat writes it. NomadNet runs messages
+// through Markdown, which takes a backtick for code, so it writes Micron's
+// tag character as ¦ (U+00A6) and turns it back when it draws
+// (nomadnet/util.py unescape_micron). NomadNet, rettui, weechat-rrc and art
+// scripts send colours and pictures this way. A backtick counts as the tag
+// only in a message with at least one backtick colour tag, so `code` stays.
+const RRC_MC_TAG = '¦';
+
+// A colour tag at s[i], just after the tag character: F or B, then rgb,
+// Trrggbb or gNN (grey, 00 to 99). Its CSS colour and length, or null.
+function rrcMcColour(s, i) {
+    const c = s[i];
+    if (c !== 'F' && c !== 'B') return null;
+    const bg = c === 'B';
+    let m;
+    if (s[i + 1] === 'T' && (m = /^[0-9a-fA-F]{6}/.exec(s.slice(i + 2, i + 8)))) return { bg, css: '#' + m[0], len: 8 };
+    if ((m = /^[0-9a-fA-F]{3}/.exec(s.slice(i + 1, i + 4)))) return { bg, css: '#' + m[0], len: 4 };
+    if (s[i + 1] === 'g' && (m = /^[0-9]{2}/.exec(s.slice(i + 2, i + 4)))) {
+        const h = Math.floor(Number(m[0]) * 2.55).toString(16).padStart(2, '0');
+        return { bg, css: `#${h}${h}${h}`, len: 4 };
+    }
+    return null;
+}
+
+function rrcMcBackticks(s) {
+    for (let i = s.indexOf('`'); i >= 0; i = s.indexOf('`', i + 1)) {
+        if (rrcMcColour(s, i + 1)) return true;
+    }
+    return false;
+}
+
+function rrcMicronPresent(text) {
+    const s = String(text || '');
+    for (let i = s.indexOf(RRC_MC_TAG); i >= 0; i = s.indexOf(RRC_MC_TAG, i + 1)) {
+        if (rrcMcColour(s, i + 1) || (s[i + 1] && 'fb!*_'.includes(s[i + 1]))) return true;
+    }
+    return rrcMcBackticks(s);
+}
+
+// The text in runs of one style each. art: a colour was set somewhere.
+// f and b go back to the default colours, ! * _ switch bold, italic and
+// underline, a tag and a backtick reset everything. Layout, field and link
+// tags (< > { c l r a =) are dropped; anything else is kept as written.
+function rrcMicronRuns(text) {
+    const s = String(text || '');
+    const backticks = rrcMcBackticks(s);
+    const runs = [];
+    let st = {}, buf = '', art = false;
+    const flush = () => { if (buf) runs.push({ text: buf, st }); buf = ''; };
+    for (let i = 0; i < s.length;) {
+        if (s[i] !== RRC_MC_TAG && !(backticks && s[i] === '`')) { buf += s[i++]; continue; }
+        const j = i + 1;
+        const colour = rrcMcColour(s, j);
+        if (colour) {
+            flush();
+            st = { ...st, [colour.bg ? 'bg' : 'fg']: colour.css };
+            art = true;
+            i = j + colour.len;
+            continue;
+        }
+        switch (s[j]) {
+            case 'f': flush(); st = { ...st, fg: null }; break;
+            case 'b': flush(); st = { ...st, bg: null }; break;
+            case '!': flush(); st = { ...st, B: !st.B }; break;
+            case '*': flush(); st = { ...st, I: !st.I }; break;
+            case '_': flush(); st = { ...st, U: !st.U }; break;
+            case '`': flush(); st = {}; break;
+            case '<': case '>': case '{': case 'c': case 'l': case 'r': case 'a': case '=': break;
+            default: buf += s[i++]; continue;
+        }
+        i = j + 1;
+    }
+    flush();
+    return { runs, art };
+}
+
+// Colours exactly as sent: the contrast fixes of rrcStyleCss would break a
+// picture. A message with colours keeps every space, does not wrap and is
+// cut at the edge (.rrc-art), so art sent a line per message keeps its
+// shape. Without colours (plain), the text without its tags.
+function rrcMicronHtml(text, plain) {
+    const { runs, art } = rrcMicronRuns(text);
+    if (plain) return rrcText(runs.map(r => r.text).join(''));
+    let html = '';
+    for (const { text: t, st } of runs) {
+        const css = [];
+        if (st.fg) css.push(`color:${st.fg}`);
+        if (st.bg) css.push(`background:${st.bg}`);
+        if (st.B) css.push('font-weight:700');
+        if (st.I) css.push('font-style:italic');
+        if (st.U) css.push('text-decoration:underline');
+        // New lines outside the spans: a coloured span is an inline block
+        // (style.css), and a line break inside one would not start a row.
+        html += !css.length ? rrcText(t) : t.split('\n')
+            .map(part => part && `<span class="rrc-mc" style="${css.join(';')}">${rrcEsc(part)}</span>`).join('\n');
+    }
+    return art ? `<span class="rrc-art">${html}</span>` : html;
+}
+
+function rrcColoursOn(own) {
+    return own || rrcSetting('show_colors', true) !== false;
+}
+
 function rrcLineHtml(line, own) {
-    if (line.fmt && (own || rrcSetting('show_colors', true) !== false)) return rrcFmtHtml(line.text, line.fmt);
+    if (line.fmt && rrcColoursOn(own)) return rrcFmtHtml(line.text, line.fmt);
+    if (rrcMicronPresent(line.text)) return rrcMicronHtml(line.text, !rrcColoursOn(own));
     return line.kind === 'msg' ? rrcQuoted(line.text) : rrcText(line.text);
+}
+
+// A notice (a hub's greeting or MOTD, often a picture): its Micron too.
+function rrcNoticeHtml(text) {
+    return rrcMicronPresent(text) ? rrcMicronHtml(text, !rrcColoursOn(false)) : rrcText(text);
 }
 
 // The box shows the message as it will go: the textarea's own text is
