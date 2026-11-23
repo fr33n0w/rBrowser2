@@ -46,7 +46,6 @@ const TOOLTIPS = [
     ['#messenger-sync-now', 'Collect your messages from the node'],
     ['#messenger-sync-cancel', 'Stop the sync'],
     ['[onclick="confirmRestart()"]', 'Restart the rBrowser server'],
-    ['[onclick="lockAdvanced()"]', 'Hide the Advanced settings'],
     ['#setting-update-now', 'Look for a new version'],
     ['#setting-auth-change', 'Set or change the access password'],
     ['#setting-ddns-apply', 'Apply the DDNS settings'],
@@ -73,4 +72,67 @@ function applyTooltips(root = document) {
         .observe(document.documentElement, { childList: true, subtree: true });
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
     else run();
+}
+
+// Our own tooltip everywhere, quicker and nicer than the browser's.
+// The title moves to data-tip on hover (and again if the code sets it later).
+{
+    const SCOPE = '[title], [data-tip], .node-cache';
+    // Text made at hover time (rbrowser.js rbTipText, node list), else data-tip.
+    const tipText = el => (typeof window.rbTipText === 'function' && window.rbTipText(el)) || el.dataset.tip;
+    const moveTitle = el => {
+        el.dataset.tip = el.getAttribute('title');
+        if (!el.hasAttribute('aria-label') || el.dataset.tipLabel) {
+            el.setAttribute('aria-label', el.dataset.tip);
+            el.dataset.tipLabel = '1';
+        }
+        el.removeAttribute('title');
+    };
+    const DELAY = 250, QUICK = 600;
+    let tip = null, timer = null, current = null, hiddenAt = 0;
+    const hide = () => {
+        clearTimeout(timer);
+        if (tip && !tip.hidden) { tip.hidden = true; hiddenAt = Date.now(); }
+        current = null;
+    };
+    const show = el => {
+        const text = tipText(el);
+        if (!text || !el.isConnected || el.hidden) return;
+        if (!tip) {
+            tip = document.createElement('div');
+            tip.id = 'rb-tip';
+            tip.setAttribute('role', 'tooltip');
+            document.body.appendChild(tip);
+        }
+        tip.textContent = text;
+        tip.hidden = false;
+        const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+        const left = Math.max(6, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 6));
+        const below = r.bottom + 6 + h < innerHeight || r.top - h - 6 < 0;
+        tip.style.left = `${left}px`;
+        tip.style.top = `${below ? r.bottom + 6 : r.top - h - 6}px`;
+    };
+    document.addEventListener('pointerover', e => {
+        if (e.pointerType === 'touch') return;
+        if (!e.target.closest) return;
+        const el = e.target.closest(SCOPE);
+        if (!el || el === current || el.tagName === 'IFRAME') return;
+        hide();
+        if (el.hasAttribute('title')) moveTitle(el);
+        if (!tipText(el)) return;
+        current = el;
+        timer = setTimeout(() => show(el), Date.now() - hiddenAt < QUICK ? 0 : DELAY);
+    });
+    document.addEventListener('pointerout', e => {
+        if (current && !current.contains(e.relatedTarget)) hide();
+    });
+    ['pointerdown', 'scroll', 'blur'].forEach(t => window.addEventListener(t, hide, true));
+    window.rbHideTip = hide;
+    new MutationObserver(list => {
+        for (const m of list) {
+            const el = m.target;
+            if (el.hasAttribute('title') && 'tip' in el.dataset) moveTitle(el);
+            if (el === current && !tip?.hidden) show(el);
+        }
+    }).observe(document.documentElement, { attributes: true, attributeFilter: ['title'], subtree: true });
 }

@@ -68,7 +68,8 @@ function richStyle(tag) {
         else if (w === 'underline') css.push('text-decoration:underline');
         else if (w === 'strike') css.push('text-decoration:line-through');
         else if (w === 'reverse') css.push('filter:invert(1)');
-        else if (w === 'blink' || w === 'not' || w === 'none') continue;
+        else if (w === 'blink') css.push('animation:bbs-blink 1s step-end 3');
+        else if (w === 'not' || w === 'none') continue;
         else if (w === 'on' && i + 1 < words.length) {
             const bg = richColor(words[++i]);
             if (bg === null) return null;
@@ -98,6 +99,14 @@ function richToHtml(text) {
         if (m[1] === '/') {
             if (open > 0 && /^[a-z0-9 #_=.:/-]*$/i.test(m[2])) { out += '</span>'; open--; }
             else out += escapeHtml(m[0]);
+            continue;
+        }
+        // rBBS: a key or a link of the screen, a click sends its command
+        if (m[2].startsWith('link=cmd:')) {
+            const cmd = m[2].slice(9);
+            // only plain commands get into the attribute
+            out += /^[A-Za-z0-9 .\/+#-]{1,40}$/.test(cmd) ? `<span class="bbs-click" data-bbs-key="${cmd}">` : '<span>';
+            open++;
             continue;
         }
         const css = richStyle(m[2]);
@@ -522,6 +531,7 @@ function renderRetibbsIdentity() {
 }
 
 async function retibbsFavorite(address, on) {
+    if (guestNoFavorites()) return;
     await retibbsPost(`/api/retibbs/favorite/${address}`, { favorite: on });
     RetiBBS.serversAt = 0;
     pollRetibbs();
@@ -592,12 +602,69 @@ const BBS_COMMANDS = {
     },
 };
 
+// rBBS (says so with CTRL HELLO rbbs): one list per area it names in CTRL AREA.
+BBS_COMMANDS.rbbs = {
+    welcome: [['e', '', 'Enter the BBS']],
+    'new caller': [['x', '', 'Log off (no nickname)']],
+    account: [['n', '', 'Change your nickname'], ['del', '', 'Delete your account'], ['x', '', 'Back']],
+    'main menu': [
+        ['b', '', 'Message boards'], ['m', '', 'Private mail'], ['c', '', 'Live chat'],
+        ['w', '', 'Who is online'], ['u', '', 'All callers'], ['f', '', 'File area'],
+        ['g', '', 'Games'], ['s', '', 'BBS stats and top scores'], ['i', '', 'About this BBS'],
+        ['n', '', 'Your account and nickname'], ['l', '', 'Linked BBSes'], ['q', '', 'Log off'],
+        ['a', '', 'Sysop menu', 'admin'],
+    ],
+    boards: [
+        ['p', '', 'Post a new thread'], ['r', '', 'Reply to this thread'],
+        ['+', '', 'Next page'], ['-', '', 'Previous page'], ['x', '', 'Back'],
+        ['d', '', 'Delete this thread (yours)'], ['k', '<n>', 'Delete a reply', 'admin'],
+        ['add', '<name> | <about>', 'New board (boards list)', 'admin'], ['del', '<n>', 'Remove a board (boards list)', 'admin'],
+    ],
+    mail: [
+        ['s', '', 'Send a message (list of people)'], ['s', '<n>', 'Read a sent message'],
+        ['d', '<n>', 'Delete a received message'], ['d s', '<n>', 'Delete a sent message'],
+        ['r', '', 'Reply (reading a message)'], ['x', '', 'Back'],
+    ],
+    chat: [['/who', '', 'Who is in the room'], ['/me', '<action>', 'Say an action'], ['/quit', '', 'Back to the main menu']],
+    games: [['1', '', 'Tic tac toe'], ['2', '', 'Connect four'], ['3', '', 'Hangman'], ['t', '', 'Top scores'],
+            ['n', '', 'New game (game over)'], ['x', '', 'Quit / back']],
+    files: [['x', '', 'Back']],
+    sysop: [
+        ['ban', '<nick>', 'Ban a user', 'admin'], ['unban', '<nick>', 'Unban', 'admin'],
+        ['nuke', '<nick>', 'Delete all posts of a user', 'admin'], ['wall', '<text>', 'Message to everyone online', 'admin'],
+        ['reload', '', 'Reload rbbs.cfg', 'admin'], ['log', '', 'Last admin actions', 'admin'],
+        ['set', '', 'BBS settings and links', 'admin'], ['x', '', 'Main menu'],
+    ],
+    settings: [
+        ['name', '<text>', 'BBS name (announced)', 'admin'], ['welcome', '<text>', 'Welcome line', 'admin'],
+        ['every', '<minutes>', 'Announce every (10-1440)', 'admin'], ['mode', 'auto|manual|off', 'Link mode', 'admin'],
+        ['add', '<address> [name]', 'Link a BBS', 'admin'], ['del', '<n>', 'Remove a link', 'admin'],
+        ['now', '', 'Announce now', 'admin'], ['colors', '', 'Themes and colours', 'admin'],
+        ['theme', '<name>', 'Ready theme (colours screen)', 'admin'],
+        ['color', '<group> <colour>', 'One group of screens (colours screen)', 'admin'],
+        ['reset', '', 'Theme colours only (colours screen)', 'admin'], ['x', '', 'Sysop menu'],
+    ],
+};
+
+// Ours, on every BBS: /clear empties the screen here; /reload asks an rBBS
+// for the screen again.
+const BBS_CLIENT_COMMANDS = [['/clear', '', 'Clear the screen (here only)']];
+const BBS_RBBS_COMMANDS = [['m', '', 'Main menu (any screen)'], ['/m', '', 'Main menu (also chat, games)'],
+                           ['/reload', '', 'Draw this screen again']];
+
 function bbsCommandList() {
     const s = sessionOf(RetiBBS.active);
     if (!s) return [];
-    const kind = BBS_COMMANDS[String(s.kind || 'retibbs').toLowerCase()] || BBS_COMMANDS.retibbs;
     const area = String(s.area || '').toLowerCase();
-    return kind[/chat/.test(area) || s.room ? 'chat' : /board/.test(area) ? 'boards' : 'main'] || [];
+    if (s.kind === 'rbbs') {
+        const k = BBS_COMMANDS.rbbs;
+        const list = k[area] || k[s.room ? 'chat' : area.replace(/s$/, '') + 's'] || k['main menu'];
+        const extra = BBS_RBBS_COMMANDS.filter(c => area !== 'main menu' || !/^\/?m$/.test(c[0]));
+        return [...list, ...extra, ...BBS_CLIENT_COMMANDS];
+    }
+    const kind = BBS_COMMANDS[String(s.kind || 'retibbs').toLowerCase()] || BBS_COMMANDS.retibbs;
+    return [...(kind[/chat/.test(area) || s.room ? 'chat' : /board/.test(area) ? 'boards' : 'main'] || []),
+            ...BBS_CLIENT_COMMANDS];
 }
 
 function renderBbsCommands(all = false) {
@@ -646,6 +713,27 @@ function retibbsPane(address) {
     return pane;
 }
 
+function retibbsRow(text) {
+    const row = document.createElement('div');
+    row.className = 'bbs-row';
+    row.innerHTML = richToHtml(text) || ' ';
+    return row;
+}
+
+// Some rows of the rBBS screen on show changed (the backend keeps them in order).
+function retibbsRows(pane, line) {
+    const live = pane.live;
+    if (!live || String(live.dataset.scr) !== String(line.scr)) return;
+    let data;
+    try { data = JSON.parse(line.text); } catch (e) { return; }
+    while (live.childElementCount > data.len) live.lastElementChild.remove();
+    while (live.childElementCount < data.len) live.appendChild(retibbsRow(''));
+    for (const [i, text] of Object.entries(data.rows || {})) {
+        const old = live.children[Number(i)];
+        if (old) old.replaceWith(retibbsRow(text));
+    }
+}
+
 async function loadRetibbsOutput(address) {
     const pane = retibbsPane(address);
     let data;
@@ -655,6 +743,10 @@ async function loadRetibbsOutput(address) {
         return;
     }
     if (data.status !== 'success') return;
+    // the session as it is now (area, room...): the command list follows at once, not at the next poll
+    const sessions = RetiBBS.state && RetiBBS.state.sessions;
+    const at = sessions ? sessions.findIndex(x => x.address === address) : -1;
+    if (at >= 0 && data.session) sessions[at] = { ...sessions[at], ...data.session };
     const el = pane.el;
     // Opened (a page reload) on a server no longer connected: an empty
     // screen, not its old welcome as if it were still on.
@@ -674,7 +766,8 @@ async function loadRetibbsOutput(address) {
         // later answer must not draw the lines again (a line twice).
         if (line.seq <= pane.seq) continue;
         pane.seq = line.seq;
-        if (line.kind === 'cls') { el.innerHTML = ''; continue; }
+        if (line.kind === 'cls') { el.innerHTML = ''; pane.live = null; continue; }
+        if (line.kind === 'rows') { retibbsRows(pane, line); continue; }
         // Effects only for what just arrived: a tab opened later shows its
         // past at once.
         const animate = fx && Date.now() / 1000 - line.ts < 10;
@@ -687,21 +780,37 @@ async function loadRetibbsOutput(address) {
             }
         }
         const div = document.createElement('div');
-        div.className = `bbs-line bbs-${line.kind}`;
+        div.className = line.kind === 'screen' ? 'bbs-line bbs-text bbs-live' : `bbs-line bbs-${line.kind}`;
         if (line.kind === 'text') div.innerHTML = richToHtml(line.text);
+        else if (line.kind === 'screen') {
+            // rBBS screen kept as rows: live updates replace single rows
+            div.dataset.scr = line.scr;
+            for (const row of line.text.split('\n')) div.appendChild(retibbsRow(row));
+            pane.live = div;
+        }
         else if (line.kind === 'me') div.textContent = `> ${line.text}`;
+        else if (line.kind === 'image') {
+            // rBBS logo: only a data: picture of the kinds the server side lets through
+            if (!/^data:image\/(webp|png|jpeg|gif);base64,[A-Za-z0-9+/=]+$/.test(line.text)) continue;
+            const img = document.createElement('img');
+            img.src = line.text;
+            img.alt = '';
+            img.addEventListener('load', () => { fitRetibbsScreen(pane); if (stick) el.scrollTop = el.scrollHeight; });
+            div.appendChild(img);
+        }
         else div.textContent = line.text;
         el.appendChild(div);
         if (animate) {
-            if (line.kind === 'text') fxReveal(pane, div, stick);
+            if (line.kind === 'text' || line.kind === 'screen') fxReveal(pane, div, stick);
             else fxAppear(pane, div, stick);
         }
     }
     while (el.childElementCount > 3000) el.firstElementChild.remove();
+    pane.screen = data.session && data.session.screen;
     // Something new from a server you are not looking at.
     const looking = RetiBBS.open && RetiBBS.active === address && document.visibilityState === 'visible' && document.hasFocus();
     if (!looking && typeof playSound === 'function'
-            && data.lines.some(l => l.kind === 'text' && Date.now() / 1000 - l.ts < 30)) playSound('bbs');
+            && data.lines.some(l => ['text', 'screen', 'rows'].includes(l.kind) && Date.now() / 1000 - l.ts < 30)) playSound('bbs');
     fitRetibbsScreen(pane);
     if (RetiBBS.open && RetiBBS.active === address) {
         pane.seen = pane.seq;
@@ -786,6 +895,7 @@ function renderRetibbsHead() {
             ${where ? ` · <b>${escapeHtml(where)}</b>` : ''}
             ${s.rtt != null && s.state === 'connected' ? ` · RTT ${Math.round(s.rtt * 1000)} ms` : ''}
             ${s.receiving ? ' · receiving…' : ''}
+            ${s.status && s.state === 'connected' ? ` · <span class="bbs-head-status">${escapeHtml(s.status)}</span>` : ''}
         </div>
         <div class="bbs-head-me" title="The identity you are logged in with: your account on this server">
             as <b>${escapeHtml(me ? me.name : s.identity)}</b>${me && me.hash ? ` <code data-bbs-act="copy-me" data-hash="${escapeHtml(me.hash)}" title="Your identity hash - click to copy">${escapeHtml(me.hash)}</code>` : ''}
@@ -806,7 +916,20 @@ function renderRetibbsHead() {
 async function retibbsSend() {
     const input = document.getElementById('bbs-input');
     const text = input.value;
-    if (!text.trim() || !RetiBBS.active) return;
+    if (!RetiBBS.active) return;
+    // a bare Enter goes to an rBBS (continue, any key), not to other servers
+    if (!text.trim()) {
+        const s = sessionOf(RetiBBS.active);
+        if (s && s.kind === 'rbbs') { input.value = ''; await retibbsSendText(' '); }
+        return;
+    }
+    // /clear is ours: the screen is emptied here, nothing goes to the server
+    if (text.trim().toLowerCase() === '/clear') {
+        const pane = RetiBBS.panes[RetiBBS.active];
+        if (pane) pane.el.innerHTML = '';
+        input.value = '';
+        return;
+    }
     if (await retibbsSendText(text)) {
         input.value = '';
         if (RetiBBS.history[RetiBBS.history.length - 1] !== text) RetiBBS.history.push(text);
@@ -844,9 +967,45 @@ async function retibbsCloseSession(address) {
 const FIT_MIN_PX = 7;
 const FIT_MAX_PX = 12;
 
+// A server that says its screen size (rBBS: CTRL SCREEN 80 25) gets the font
+// that fills the pane with it, as a terminal would, lines touching.
+let bbsCharRatio = 0;
+const FIT_GRID_MAX_PX = 17;
+
+function fitRetibbsGrid(pane, cols, rows) {
+    const el = pane.el;
+    if (!bbsCharRatio) {
+        const probe = document.createElement('span');
+        probe.style.cssText = 'position:absolute;visibility:hidden;font-size:100px;white-space:pre';
+        probe.textContent = 'M'.repeat(100);
+        el.appendChild(probe);
+        bbsCharRatio = probe.getBoundingClientRect().width / 10000;
+        probe.remove();
+        if (!bbsCharRatio) return;
+    }
+    const edge = window.innerWidth > 700 ? 16 : 6;
+    const w = el.clientWidth - 2 * edge - 4;
+    // As wide as the pane up to a reading size (or the size chosen in the settings);
+    // past that the screen sits in the middle.
+    const chosen = retibbsFontSize();
+    const px = chosen || Math.max(FIT_MIN_PX, Math.floor(Math.min(w / (cols * bbsCharRatio), FIT_GRID_MAX_PX) * 10) / 10);
+    el.style.fontSize = `${px}px`;
+    const side = edge + Math.max(0, (w - cols * bbsCharRatio * px) / 2);
+    el.style.paddingLeft = el.style.paddingRight = `${side}px`;
+}
+
 function fitRetibbsScreen(pane) {
     const el = pane.el;
-    if (window.innerWidth > 700) { el.style.fontSize = ''; return; }
+    el.classList.toggle('bbs-grid', !!pane.screen);
+    if (pane.screen) {
+        if (!el.hidden && el.clientWidth) fitRetibbsGrid(pane, pane.screen[0], pane.screen[1]);
+        el.style.setProperty('--bbs-cols', pane.screen[0]);
+        el.style.setProperty('--bbs-rows', pane.screen[1]);
+        return;
+    }
+    el.style.paddingLeft = el.style.paddingRight = '';
+    const chosen = retibbsFontSize();
+    if (window.innerWidth > 700 || chosen) { el.style.fontSize = chosen ? `${chosen}px` : ''; return; }
     if (el.hidden || !el.clientWidth) return;
     el.style.fontSize = `${FIT_MAX_PX}px`;
     const room = el.clientWidth - 16;
@@ -881,6 +1040,10 @@ document.addEventListener('click', e => {
     finishRetibbsFx();
     const sel = window.getSelection && window.getSelection();
     if (sel && String(sel).length) return;
+    // a key of the rBBS on show (a CLS empties the pane: old screens are not there)
+    const key = e.target.closest('.bbs-click');
+    const pane = RetiBBS.panes[RetiBBS.active];
+    if (key && pane && pane.el.contains(key)) retibbsSendText('CTRL KEY ' + key.dataset.bbsKey);
     const input = document.getElementById('bbs-input');
     if (input && !input.disabled && !isMobileDevice()) input.focus();
 });
@@ -890,6 +1053,12 @@ document.addEventListener('click', e => {
 // the line "dials" like a modem; text scrolls in line by line, as at a slow
 // baud rate; a CRT glow and scanlines. Only looks: any key or click shows
 // everything at once.
+
+// Font of the BBS screens chosen in the settings, 0 = automatic.
+function retibbsFontSize() {
+    const n = Number(RetiBBS.state && RetiBBS.state.settings && RetiBBS.state.settings.font_size);
+    return n >= 8 && n <= 32 ? n : 0;
+}
 
 function retibbsFx() {
     return !!(RetiBBS.state && RetiBBS.state.settings && RetiBBS.state.settings.terminal_fx);
@@ -1025,6 +1194,8 @@ async function loadRetibbsSettings() {
     if (nomadProto) nomadProto.classList.toggle('active', !st.settings.protocols || st.settings.protocols.nomadnet !== false);
     const fx = document.getElementById('setting-bbs-fx');
     if (fx) fx.classList.toggle('active', !!st.settings.terminal_fx);
+    const font = document.getElementById('setting-bbs-font');
+    if (font) font.value = String(st.settings.font_size || 0);
     fillRetibbsIdentitySelect(st.identities, st.settings.identity);
 }
 
@@ -1057,10 +1228,12 @@ function saveRetibbsSettings() {
         enabled: toggle.classList.contains('active'),
         protocols: { retibbs: on('setting-bbs-proto-retibbs'), nomadnet: on('setting-bbs-proto-nomadnet') },
         terminal_fx: on('setting-bbs-fx'),
+        font_size: Number((document.getElementById('setting-bbs-font') || {}).value || 0),
         ...(select && select.value ? { identity: select.value } : {}),
     }).then(res => {
         if (res.status === 'error') showNotification(`BBS client: ${escapeHtml(res.error)}`, 'error', 5000);
-        pollRetibbs();
+        // the font size counts at once on the open screens
+        return pollRetibbs().then(() => Object.values(RetiBBS.panes).forEach(fitRetibbsScreen));
     });
 }
 

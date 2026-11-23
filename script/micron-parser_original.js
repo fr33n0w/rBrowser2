@@ -699,6 +699,8 @@ applyStyleToElement(el, style) {
         // convert style fg/bg to colors
         let fgColor = this.colorToCss(style.fg);
         let bgColor = this.colorToCss(style.bg);
+        // Light theme: a text colour meant for black, on white, made darker until it reads.
+        if (!this.darkTheme && fgColor && !bgColor) fgColor = MicronParser.readableOnLight(fgColor);
 
         if (fgColor && fgColor !== "default") {
             el.style.color = fgColor;
@@ -742,6 +744,20 @@ applyStyleToElement(el, style) {
         if (style.italic) {
             el.style.fontStyle = "italic";
         }
+    }
+
+    static readableOnLight(css, min = 3.5) {
+        const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(css || '');
+        if (!m) return css;
+        const h = m[1].length === 3 ? m[1].replace(/./g, x => x + x) : m[1];
+        let rgb = [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16));
+        const lum = c => {
+            const v = c.map(x => x / 255).map(x => x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4);
+            return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+        };
+        if (1.05 / (lum(rgb) + 0.05) >= min) return css;
+        for (let i = 0; i < 20 && 1.05 / (lum(rgb) + 0.05) < min; i++) rgb = rgb.map(x => Math.round(x * 0.88));
+        return '#' + rgb.map(x => x.toString(16).padStart(2, '0')).join('');
     }
 
     colorToCss(c) {

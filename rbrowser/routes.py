@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import io
 import ipaddress
+import contextvars
 import json
 import mimetypes
 import os
 import re
+import secrets
 from typing import Any, Dict, Optional
 import RNS
 from . import rnsquiet, vanity
@@ -25,6 +27,7 @@ from html import escape as html_escape
 import threading
 
 from .nomadnet import CancelToken
+from .messenger import guest_view
 
 # Global storage for download progress
 download_progress = {}
@@ -127,10 +130,88 @@ def register_routes(app, browser) -> None:
     """Attach all routes to the provided Flask application."""
 
     # --- Access password (rbrowser/auth.py) ------------------------------
-    from flask import session, redirect
-    from .auth import OPEN_PATHS, LOGIN_PAGE, guest_blocked
+    from flask import session, redirect, g as flask_g
+    from .auth import OPEN_PATHS, LOGIN_PAGE, LOGIN_REOPEN_SCRIPT, guest_blocked
+    from . import guest_log
+    from .guest_sessions import new_id as new_guest_id, TIMEOUT as GUEST_TIMEOUT, AWAY_KEEP as GUEST_AWAY_KEEP
+
+    def _guest_label(gid=None):
+        """Who in the guest logs: the name of the session's identity (rB2.Guest1.ab12)."""
+        entry = browser.guest_identity.entry(gid)
+        return entry.default_name() if entry is not None else "rB2.Guest?"
+
+    def log_guest(text, gid=None, address=None):
+        if auth is not None and auth.guest_logged():
+            if address is None:
+                address = request.remote_addr or ""
+            guest_log.write(auth.data["guest_log_path"], address, f"{_guest_label(gid)}  {text}")
+
+    def _short_agent():
+        return " ".join((request.headers.get("User-Agent") or "?").split())[:120]
+
+    def log_access(address, gid, text):
+        """logs/guest_access.log: who came in and went out (its own switch, beside the actions log)."""
+        if auth is not None and auth.guest_access_logged():
+            guest_log.write(auth.guest_access_file(), address or "", f"{gid or '-'}  {text}")
+
+    def guest_sweep():
+        """Sessions gone silent, back, or gone: logged."""
+        for row in auth.guests.expired():
+            if row["event"] == "away":
+                text = f"Away (no contact for {GUEST_TIMEOUT} s, identity kept {GUEST_AWAY_KEEP // 60} min)"
+            elif row["event"] == "back":
+                text = "Back (same identity)"
+            else:
+                text = "Left (page closed)" if "bye" in row else f"Left (away for {GUEST_AWAY_KEEP // 60} min)"
+            log_access(row["address"], row["id"], text)
+
+    def guest_place():
+        """A guest coming in with all places taken: the one away the longest makes room."""
+        if browser.guest_identity.full():
+            row = auth.guests.evict_away()
+            if row is not None:
+                log_access(row["address"], row["id"], "Left (away, its place taken by a new guest)")
+        return not browser.guest_identity.full()
+
+    def guests_out(why):
+        """All guest sessions closed at once (guest mode off, Close all, access changed)."""
+        for row in auth.guests.end_all():
+            log_access(row["address"], row["id"], why)
+
+    def guest_status_for(role):
+        """The guest part of /api/auth; the log's place is not the guests' business."""
+        out = dict(auth.status(request.remote_addr)["guest"])
+        if role != "owner":
+            for key in ("log_path", "log_default", "access_log_path"):
+                out.pop(key, None)
+        return out
 
     auth = getattr(browser, "auth", None)
+
+    # A guest session's identity lives as long as the session (rbrowser/guest_identity.py).
+    if getattr(browser, "guest_identity", None) is None:
+        from .guest_identity import GuestIdentity
+        browser.guest_identity = GuestIdentity()
+    if auth is not None:
+        browser.guest_identity.max_guests = auth.guest_max
+
+        def guest_message_in(gid, peer, text, files):
+            """An LXMF message to a guest (no request: the address is its session's)."""
+            row = auth.guests.rows.get(gid) or {}
+            line = f"LXMF from {peer}"
+            if auth.guest_lxmf_logged():
+                line += f": {guest_log._short(text)}"
+            if files:
+                line += f"  {files} file{'s' if files != 1 else ''}"
+            log_guest(guest_log.name_hashes(line, _log_name), gid, row.get("address", ""))
+        if getattr(browser, "messenger", None) is not None:
+            browser.messenger.on_guest_message = guest_message_in
+        auth.guests.on_end = browser.guest_identity.release
+        # Guest sessions across a clean restart (rbrowser/guest_resume.py).
+        from . import guest_resume
+        from .server_settings import BEFORE_EXIT
+        guest_resume.load(browser, auth)
+        BEFORE_EXIT.append(lambda: guest_resume.save(browser, auth))
 
     # Settings > File Downloads (rbrowser/files.py).
     from .files import Files, is_local as _loopback
@@ -180,7 +261,7 @@ def register_routes(app, browser) -> None:
         except ValueError:
             public = False
         if public and (auth is None or not auth.data["enabled"]):
-            return "rBrowser: from the internet only with the access password on (Settings > System Setup)", 403
+            return "rBrowser: from the internet only with the access password on (Settings > Access & Remote)", 403
         # DNS rebinding: evil.site resolving to 127.0.0.1 would be "the same
         # site" as the page and could read everything, keys included.
         if not _trusted_host(_host_name(request.host)):
@@ -203,6 +284,13 @@ def register_routes(app, browser) -> None:
     @app.before_request
     def require_password():
         from .remote import TUNNEL_MARK
+        from .messenger import set_guest_view
+        from .guest_identity import set_current as set_guest_current
+        # Every request says it again: worker threads are reused.
+        is_guest = (auth is not None and auth.required(request.remote_addr)
+                    and auth.session_role(session) == "guest")
+        set_guest_view(is_guest)
+        set_guest_current(str(session.get("gid", "")) if is_guest else "")
         # Through the tunnel (or a proxy) only with the password on: never
         # an open door to the internet, whatever the settings say.
         remote = getattr(browser, "remote", None)
@@ -216,7 +304,27 @@ def register_routes(app, browser) -> None:
         if role == "guest":
             why = guest_blocked(request.method, request.path, auth.guest_rights())
             if why:
+                # Refused reads are mostly the page polling a closed client: only writes.
+                if request.method not in ("GET", "HEAD", "OPTIONS") and not guest_log.is_bookkeeping(request.path):
+                    log_guest(f"REFUSED {request.method} {request.path}: {why}")
                 return jsonify({"status": "error", "error": why, "guest": True}), 403
+            if not session.get("gid"):
+                session["gid"] = new_guest_id()       # logged in before guest sessions had ids
+            if ban_out(session["gid"]):
+                return jsonify({"status": "error", "error": auth.ban_text(request.remote_addr or "", _device()),
+                                "auth": False}), 401
+            flask_g.rb_guest = True
+            auth.guest_seen = time.time()
+            set_guest_current(session["gid"])
+            auth.guests.touch(session["gid"], request.remote_addr or "", _short_agent(), request.path, _device())
+            guest_sweep()
+            # Its identity gone (away too long, a crash): a new session from the login.
+            if browser.guest_identity.entry(session["gid"]) is None:
+                lost_session()
+                if request.path.startswith("/api/"):
+                    return jsonify({"status": "error", "error": GUEST_ENDED["lost"], "auth": False,
+                                    "ended": "lost"}), 401
+                return redirect("/login?ended=lost")
             return None
         if role:
             return None
@@ -245,6 +353,24 @@ def register_routes(app, browser) -> None:
                 "frame-ancestors 'self'")
 
     @app.after_request
+    def guest_actions(response):
+        if getattr(flask_g, "rb_guest", False) and auth.guest_logged():
+            try:
+                line = guest_log.describe(request, response.status_code, auth.guest_lxmf_logged())
+            except Exception as exc:
+                line = f"{request.method} {request.path} (not described: {exc})"
+            if line:
+                log_guest(guest_log.name_hashes(line, _log_name))
+        return response
+
+    def _log_name(address):
+        bbs = getattr(browser, "retibbs", None)
+        name = bbs.name_of(address) if bbs is not None else ""
+        if not name and hasattr(browser, "node_name_for"):
+            name = browser.node_name_for(address)
+        return name
+
+    @app.after_request
     def security_headers(response):
         if response.mimetype == "text/html":
             response.headers.setdefault("Content-Security-Policy", PAGE_CSP)
@@ -254,6 +380,50 @@ def register_routes(app, browser) -> None:
             response.headers.setdefault("Referrer-Policy", "same-origin")
         return response
 
+    GUEST_ENDED = {"closed": "The owner closed guest access.",
+                   "kicked": "The owner closed your guest session.",
+                   "banned": "The owner banned guest access from this address.",
+                   "changed": "The owner changed guest access: log in again.",
+                   "full": "All guest places are taken: try again later.",
+                   "lost": "Your guest session ended (rBrowser restarted, or away too long): log in again."}
+
+    def lost_session():
+        """A guest cookie whose identity is gone: the session ends, the cookie with it."""
+        gid = str(session.get("gid", ""))
+        if gid in auth.guests.rows:
+            auth.guests.end(gid)
+        log_access(request.remote_addr, gid, "Session lost (identity gone): sent to the login")
+        auth.revoke(str(session.get("sid", "")))
+        session.clear()
+
+    DEVICE_COOKIE = "rb_guest_dev"
+
+    def _device():
+        """This browser's guest mark, "" if none."""
+        value = str(request.cookies.get(DEVICE_COOKIE, ""))
+        return value if re.fullmatch(r"[0-9a-f]{16}", value) else ""
+
+    @app.after_request
+    def mark_guest_browser(response):
+        # A long cookie of its own: Ban also takes this browser.
+        if auth is not None and not _device() and auth.session_role(session) == "guest":
+            response.set_cookie(DEVICE_COOKIE, secrets.token_hex(8), max_age=5 * 365 * 86400,
+                                httponly=True, samesite="Lax")
+        return response
+
+    def ban_out(gid):
+        """A guest session from a banned address or browser: kicked now (so it stays out). True if it was."""
+        address = request.remote_addr or ""
+        if auth.banned(address, _device()) is None:
+            return False
+        if auth.kick(gid):
+            log_access(address, gid, "Out: banned")
+        return True
+
+    def guest_open_here(address):
+        """The "Enter as guest" button: open guest access, and this address or browser not banned."""
+        return auth.guest_open() and auth.banned(address, _device()) is None
+
     @app.route("/login", methods=["GET", "POST"])
     def login():
         nxt = _safe_next(request.values.get("next"))
@@ -262,21 +432,74 @@ def register_routes(app, browser) -> None:
         error = ""
         if request.method == "POST":
             address = request.remote_addr or ""
-            tag = auth.login(request.form.get("password"), address)
+            if auth.guest_on():
+                guest_sweep()                   # places of the sessions already gone are free
+            tag = auth.login(request.form.get("password"), address, request.form.get("guest") == "1", _device())
+            if tag and session.get("gid"):
+                auth.guests.end(str(session["gid"]))      # this browser's previous guest session: its place is free
+            if tag and tag != auth.tag() and not guest_place():
+                tag, full = None, True
+            else:
+                full = False
             if tag:
                 session.clear()
                 session.permanent = True
                 session["auth"] = tag
+                session["sid"] = secrets.token_hex(8)
+                if auth.session_role(session) == "guest":
+                    session["gid"] = new_guest_id()
+                    auth.guests.touch(session["gid"], address, _short_agent(), device=_device())
+                    browser.guest_identity.assign(session["gid"])
+                    how = " (open)" if auth.guest_open() else ""
+                    who = _guest_label(session["gid"])
+                    log_guest(f"Login as guest{how}  [{_short_agent()}]", session["gid"])
+                    log_access(address, session["gid"], f"Login{how} as {who}  [{_short_agent()}]")
                 return redirect(nxt)
             wait = auth.locked(address)
-            error = f"Too many wrong passwords: try again in {wait // 60 + 1} min" if wait else "Wrong password"
-        page = LOGIN_PAGE.replace("{next}", html_escape(nxt, quote=True)).replace("{error}", html_escape(error))
+            error = (GUEST_ENDED["full"] if full
+                     else f"Too many wrong passwords: try again in {wait // 60 + 1} min" if wait
+                     else auth.ban_text(address, _device()) if auth.guest_on() and auth.banned(address, _device()) is not None
+                     else "Wrong password")
+        address = request.remote_addr or ""
+        guest = ('<button type="submit" name="guest" value="1" class="guest">Enter as guest</button>'
+                 if guest_open_here(address) else "")
+        if auth.guest_logged():
+            notice = ('<p class="logged">Guest sessions are monitored: guest actions are logged'
+                      + (', LXMF messages included' if auth.guest_lxmf_logged() else '') + '.</p>')
+        elif auth.guest_on() and auth.guest_access_logged():
+            notice = '<p class="logged">Guest logins are logged.</p>'
+        else:
+            notice = ""
+        if auth.guest_on():
+            guest_sweep()
+            taken, top = browser.guest_identity.slots()
+            notice = f'<p class="online">Guests online: {auth.guests.count()} (Slots: {taken}/{top})</p>' + notice
+        # Sent here by the guest page when the owner shut guests out.
+        ended = GUEST_ENDED.get(request.args.get("ended", ""))
+        if ended:
+            session.clear()                     # the old guest cookie is worth nothing now
+            if not error:
+                error = ended
+        if (not error or ended == GUEST_ENDED["banned"]) and auth.guest_on():
+            error = auth.ban_text(address, _device()) or error     # the time left, while the ban lasts
+        script = (LOGIN_REOPEN_SCRIPT.replace("{next_js}", json.dumps(nxt).replace("<", "\\u003c"))
+                  .replace("{on_js}", json.dumps(auth.guest_on()))
+                  .replace("{open_js}", json.dumps(guest_open_here(address))))
+        page = (LOGIN_PAGE.replace("{next}", html_escape(nxt, quote=True)).replace("{guest}", guest)
+                .replace("{notice}", notice)
+                .replace("{error}", html_escape(error)).replace("{script}", script))
         response = app.make_response(page)
         response.headers["Cache-Control"] = "no-store"
         return response, (429 if "Too many" in error else 200)
 
     @app.route("/logout", methods=["GET", "POST"])
     def logout():
+        if auth is not None and auth.session_role(session) == "guest":
+            log_guest("Logout")
+            log_access(request.remote_addr, session.get("gid"), "Logout")
+            auth.guests.end(str(session.get("gid", "")))
+        if auth is not None:
+            auth.revoke(str(session.get("sid", "")))
         session.clear()
         return redirect("/login")
 
@@ -287,31 +510,85 @@ def register_routes(app, browser) -> None:
         # fields as GET /api/auth and GET /api/ui-prefs.
         page_auth = {}
         if auth is not None:
-            page_auth = {"role": auth.role(session, request.remote_addr),
-                         "guest": auth.status(request.remote_addr)["guest"]}
+            role = auth.role(session, request.remote_addr)
+            page_auth = {"role": role, "guest": guest_status_for(role),
+                         "asked": auth.required(request.remote_addr)}    # logged in with the password
+            if role == "guest" and guest_waits():
+                return render_template("guest_wait.html")
         with _UI_PREFS_LOCK:
             ui_prefs = _read_ui_prefs()
         return render_template("index.html", page_auth=page_auth, ui_prefs=ui_prefs)
+
+    def guest_waits():
+        """This guest's LXMF announce needs the stamp from its browser first (with LXMF open to guests)."""
+        entry = browser.guest_identity.entry()
+        return entry is not None and not entry.ready and auth.guest_rights().get("messenger")
+
+    # settings/access_changes.log: who switched what (never a password or a token).
+    def _access_changed(incoming):
+        shown = []
+        for key, value in sorted(incoming.items()):
+            if key == "current":
+                continue
+            if "password" in key or "token" in key or key == "ddns_url":
+                shown.append(f"{key}=***" if value else f"{key}=''")
+            else:
+                shown.append(f"{key}={value}")
+        line = (f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {request.remote_addr or '?'}  {request.path}  "
+                f"{', '.join(shown)}\n")
+        from . import auth as auth_mod
+        folder = os.path.dirname(auth_mod.AUTH_FILE) or "."
+        try:
+            os.makedirs(folder, exist_ok=True)
+            with open(os.path.join(folder, "access_changes.log"), "a", encoding="utf-8") as handle:
+                handle.write(line)
+        except OSError as exc:
+            print(f"⚠️ access_changes.log not written: {exc}")
 
     @app.route("/api/auth", methods=["GET", "POST"])
     def api_auth():
         if auth is None:
             return jsonify({"status": "error", "error": "Not available"}), 500
         if request.method == "GET":
-            return jsonify({**auth.status(request.remote_addr),
-                            "role": auth.role(session, request.remote_addr)})
+            role = auth.role(session, request.remote_addr)
+            return jsonify({**auth.status(request.remote_addr), "guest": guest_status_for(role), "role": role})
         incoming = request.get_json(silent=True) or {}
         # The tunnel puts rBrowser on the internet: the password stays on
         # while it runs (it cannot start without one either).
         remote = getattr(browser, "remote", None)
         if remote is not None and remote.settings.get("tunnel_on") and "enabled" in incoming and not incoming["enabled"]:
-            return jsonify({"status": "error", "error": "Switch the Remote access tunnel off first (below): "
+            return jsonify({"status": "error", "error": "Switch the Remote Tunnel off first (below): "
                                                         "while it runs anyone on the internet could open rBrowser"}), 400
+        was_on = auth.guest_on()
+        old_tag = auth.guest_tag()
         res = auth.update(incoming, request.remote_addr or "")
         if res.get("status") == "success":
+            _access_changed(incoming)
+            if was_on and not auth.guest_on():
+                guests_out("Closed: guest access switched off")
+            elif was_on and auth.guest_tag() != old_tag:
+                guests_out("Logged out: guest access changed")
+            # Guests out of RRC or the BBS: their links close now, not at the next drop.
+            # A fixed hub chosen: guest hubs elsewhere close too.
+            guests_in = auth.guest_on()
+            rrc = getattr(browser, "rrc", None)
+            if rrc is not None:
+                if not (guests_in and auth.guest_rights().get("rrc")):
+                    rrc.close_guests()
+                elif auth.guest_fixed_hub():
+                    rrc.close_guests(keep=auth.guest_fixed_hub())
+            bbs = getattr(browser, "retibbs", None)
+            if bbs is not None and not (guests_in and auth.guest_rights().get("bbs")):
+                bbs.close_guests()
+            radio = getattr(browser, "radio", None)
+            if radio is not None and not (guests_in and auth.guest_rights().get("radio")):
+                radio.close_guests()
+            if not (guests_in and auth.guest_rights().get("nomadnet")) and hasattr(browser, "close_guest_links"):
+                browser.close_guest_links()
             # Whoever just set it stays in, with the new password's tag.
             session.permanent = True
             session["auth"] = res.pop("tag")
+            session.setdefault("sid", secrets.token_hex(8))
         return jsonify(res), (200 if res.get("status") == "success" else 400)
 
     @app.route("/api/remote", methods=["GET", "POST"])
@@ -321,7 +598,10 @@ def register_routes(app, browser) -> None:
             return jsonify({"status": "error", "error": "Not available"}), 500
         if request.method == "GET":
             return jsonify(remote.status())
-        res = remote.update(request.get_json(silent=True) or {})
+        incoming = request.get_json(silent=True) or {}
+        res = remote.update(incoming)
+        if res.get("status") == "success":
+            _access_changed(incoming)
         return jsonify(res), (200 if res.get("status") == "success" else 400)
 
     @app.route("/")
@@ -343,6 +623,15 @@ def register_routes(app, browser) -> None:
         # Revalidated on every load, as the scripts: a changed stylesheet is
         # picked up by a plain reload (an unchanged one comes back as a 304).
         response = send_from_directory("templates", "style.css", mimetype="text/css")
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+    @app.route("/themes/<name>.css")
+    def serve_theme(name):
+        # Colours only (templates/themes): style.css uses them as var(--c-...).
+        if not re.fullmatch(r"[a-z0-9_-]{1,32}", name):
+            abort(404)
+        response = send_from_directory(os.path.join("templates", "themes"), f"{name}.css", mimetype="text/css")
         response.headers["Cache-Control"] = "no-cache"
         return response
 
@@ -382,6 +671,12 @@ def register_routes(app, browser) -> None:
         response.add_etag()
         return response.make_conditional(request)
 
+    def _guests_for_owner():
+        if auth is None or not auth.guest_on() or auth.role(session, request.remote_addr) != "owner":
+            return None
+        guest_sweep()
+        return auth.guests.count()
+
     @app.route("/api/status")
     def api_status():
         from . import links
@@ -407,6 +702,8 @@ def register_routes(app, browser) -> None:
                 "favorites_revision": browser.favorites.revision,
                 "open_links": open_links,
                 "heard": _heard_counts(browser),
+                # Guests online, for the owner's status bar; None with guest mode off.
+                "guests": _guests_for_owner(),
                 # rbrowser/rnswatch.py: Reticulum's interfaces to the network, up / all.
                 "interfaces": {k: v for k, v in browser.rnswatch.status().items() if k != "rns_offline_for"},
             }
@@ -423,6 +720,28 @@ def register_routes(app, browser) -> None:
         if not url or len(url) > 2048:
             return jsonify({"delivered": False, "error": "no url"}), 400
         return jsonify({"delivered": links.inbox.deliver(url)})
+
+    @app.route("/api/nomadnet/tabs", methods=["POST"])
+    def api_nomadnet_tabs():
+        """The nodes the page tabs show: links nobody needs get closed."""
+        # sendBeacon posts text/plain, hence force.
+        d = request.get_json(force=True, silent=True) or {}
+        closed = browser.link_watch.report(d.get("client"), d.get("open"), d.get("watched"),
+                                           closed=d.get("closed") or (), gone=bool(d.get("gone")))
+        return jsonify({"closed": closed})
+
+    @app.route("/api/link-stamp/<node_hash>")
+    def api_link_stamp(node_hash):
+        """Whether opening a page will first compute a link stamp (no open link, the node asks a cost)."""
+        try:
+            dh = bytes.fromhex(node_hash)
+            link = browser.nomadnet_cached_links.get(dh)
+            open_link = bool(link and link.status == RNS.Link.ACTIVE)
+            cost = RNS.Identity.recall_link_cost(dh)
+            needs = bool(cost) and not open_link and getattr(RNS.Transport, "STAMP_LRS", False)
+            return jsonify({"cost": cost, "needs": needs})
+        except Exception:
+            return jsonify({"cost": None, "needs": False})
 
     @app.route("/api/fetch/<node_hash>", methods=["GET", "POST"])
     def api_fetch_page(node_hash):
@@ -453,6 +772,9 @@ def register_routes(app, browser) -> None:
         # A page shown in a tab is a visit, wherever it came from. Partials
         # and auto-reloads are not (the page sends partial=1 / visit=0).
         def count_visit():
+            # A guest's pages are not the owner's visits or history.
+            if guest_view():
+                return
             visits = getattr(browser, "visits", None)
             if visits and request.args.get("partial") != "1" \
                     and request.args.get("visit") != "0":
@@ -709,6 +1031,162 @@ def register_routes(app, browser) -> None:
         payload = request.get_json(silent=True) or {}
         return _identity_action(lambda: browser.switch_identity(str(payload.get("id", ""))))
 
+    @app.route("/api/guest/state")
+    def api_guest_state():
+        if auth is None or not auth.required(request.remote_addr):
+            return jsonify({"state": "none"})
+        address = request.remote_addr or ""
+        if auth.session_role(session) == "guest" and session.get("gid") and not ban_out(session["gid"]):
+            # An open path (skips before_request): the 5 s round keeps the session online here.
+            auth.guests.touch(session["gid"], address, _short_agent(), device=_device())
+        st = auth.guest_state(session)
+        if st["state"] == "active":
+            entry = browser.guest_identity.entry(str(session.get("gid", "")))
+            if entry is None:
+                lost_session()
+                return jsonify({"state": "lost"})
+            st["identity"] = entry.hash
+        if st["state"] == "kicked" and auth.banned(address, _device()) is not None:
+            st = {"state": "banned"}
+        elif st["state"] == "none" and "guest_open" in st:
+            st["guest_open"] = guest_open_here(address)     # the ban ending brings the button back
+        return jsonify(st)
+
+    @app.route("/api/guest/bye", methods=["POST"])
+    def api_guest_bye():
+        """The guest page closing (sendBeacon on pagehide)."""
+        if auth is not None and auth.session_role(session) == "guest":
+            auth.guests.bye(str(session.get("gid", "")))
+        return "", 204
+
+    # Guest identities (rbrowser/guest_identity.py): a guest gets its own, the owner the list.
+    @app.route("/api/guest/identity")
+    def api_guest_identity():
+        keys = browser.guest_identity
+        if guest_view():
+            entry = keys.entry()
+            if entry is None:
+                return jsonify({"status": "error", "error": "No guest session"}), 404
+            return jsonify({**keys.stamp_job(), **entry.info()})
+        return jsonify({"status": "success", "guests": [e.info() for e in keys.list()],
+                        "max": auth.guest_max() if auth is not None else 0})
+
+    @app.route("/api/guest/stamp", methods=["POST"])
+    def api_guest_stamp():
+        """The announce stamp the guest's browser found (script/stamper.js)."""
+        if not guest_view():
+            return jsonify({"status": "error", "error": "Guests only"}), 403
+        payload = request.get_json(silent=True) or {}
+        keys = browser.guest_identity
+        result = keys.skip_stamp() if payload.get("skip") else keys.accept_stamp(payload.get("stamp"))
+        return jsonify(result), (200 if result["status"] == "success" else 400)
+
+    @app.route("/api/guest/name", methods=["POST"])
+    def api_guest_name():
+        """A guest renames itself in one client ("" = everywhere); empty name = the default."""
+        if not guest_view():
+            return jsonify({"status": "error", "error": "Guests only"}), 403
+        payload = request.get_json(silent=True) or {}
+        client = str(payload.get("client", ""))
+        if client not in ("", "nomadnet", "rrc", "bbs", "messenger"):
+            return jsonify({"status": "error", "error": "Unknown client"}), 400
+        return jsonify(browser.guest_identity.set_nickname(payload.get("name"), client))
+
+    # Guest actions log (rbrowser/guest_log.py): never for guests (auth.GUEST_NEVER).
+    def _guest_log_path():
+        return auth.data["guest_log_path"] if auth is not None else ""
+
+    @app.route("/api/guest/log")
+    def api_guest_log():
+        return jsonify(guest_log.read(_guest_log_path()))
+
+    @app.route("/api/guest/log/clear", methods=["POST"])
+    def api_guest_log_clear():
+        return jsonify(guest_log.clear(_guest_log_path()))
+
+    # Guests online (guest_sessions.py) and the access log: owner only (auth.GUEST_NEVER).
+    @app.route("/api/guest/sessions")
+    def api_guest_sessions():
+        guest_sweep()
+        rows = auth.guests.online(with_away=True) if auth.guest_on() else []
+        for row in rows:
+            entry = browser.guest_identity.entry(row["id"])
+            row["identity"] = entry.info() if entry is not None else None
+        return jsonify({"status": "success", "active": auth.guest_on(), "sessions": rows,
+                        "bans": auth.bans(), "now": time.time(), "max": auth.guest_max()})
+
+    @app.route("/api/guest/sessions/kick", methods=["POST"])
+    def api_guest_kick():
+        gid = str((request.get_json(silent=True) or {}).get("id", ""))
+        row = auth.guests.rows.get(gid)
+        if row is None or not auth.kick(gid):
+            return jsonify({"status": "error", "error": "That guest session is not online any more"}), 404
+        log_access(row["address"], gid, "Kicked by the owner")
+        return jsonify({"status": "success"})
+
+    @app.route("/api/guest/sessions/ban", methods=["POST"])
+    def api_guest_ban():
+        """Ban an online guest (its address and its browser): 15 min, 1 h, 24 h or until Unban (0)."""
+        payload = request.get_json(silent=True) or {}
+        row = auth.guests.rows.get(str(payload.get("id", "")))
+        if row is None:
+            return jsonify({"status": "error", "error": "That guest session is not online any more"}), 404
+        try:
+            seconds = int(payload.get("seconds", -1))
+        except (TypeError, ValueError):
+            seconds = -1
+        if not auth.ban(row["address"], row.get("device", ""), seconds, row.get("agent", "")):
+            return jsonify({"status": "error", "error": "Not a ban time"}), 400
+        how = f"{seconds // 60} min" if 0 < seconds < 3600 else f"{seconds // 3600} h" if seconds else "until Unban"
+        for other in list(auth.guests.rows.values()):
+            same = other["address"] == row["address"] or (row.get("device") and other.get("device") == row["device"])
+            if same and auth.kick(other["id"]):
+                log_access(other["address"], other["id"], f"Banned by the owner ({how})")
+        return jsonify({"status": "success"})
+
+    @app.route("/api/guest/sessions/unban", methods=["POST"])
+    def api_guest_unban():
+        bid = str((request.get_json(silent=True) or {}).get("id", ""))
+        row = auth.data["guest_bans"].get(bid)
+        if row is None or not auth.unban(bid):
+            return jsonify({"status": "error", "error": "That ban is over already"}), 404
+        log_access(row.get("address", ""), "-", "Unbanned by the owner")
+        return jsonify({"status": "success"})
+
+    @app.route("/api/guest/sessions/close-all", methods=["POST"])
+    def api_guest_close_all():
+        auth.close_all_guests()
+        guests_out("Closed by the owner (Close all)")
+        return jsonify({"status": "success"})
+
+    @app.route("/api/guest/log/access")
+    def api_guest_access_log():
+        return jsonify(guest_log.read(auth.guest_access_file()))
+
+    @app.route("/api/guest/log/access/clear", methods=["POST"])
+    def api_guest_access_log_clear():
+        return jsonify(guest_log.clear(auth.guest_access_file()))
+
+    @app.route("/api/guest/log/access/open", methods=["POST"])
+    def api_guest_access_log_open():
+        if not is_local(request.remote_addr):
+            return jsonify({"status": "error", "error": "Only on the computer running rBrowser"}), 403
+        target = auth.guest_access_file()
+        if not os.path.isfile(target):
+            return jsonify({"status": "error", "error": "Nothing logged yet: the file does not exist"})
+        from .files import _launch
+        return jsonify(_launch(target, select=False))
+
+    @app.route("/api/guest/log/open", methods=["POST"])
+    def api_guest_log_open():
+        if not is_local(request.remote_addr):
+            return jsonify({"status": "error", "error": "Only on the computer running rBrowser"}), 403
+        target = guest_log.resolve(_guest_log_path())
+        if not os.path.isfile(target):
+            return jsonify({"status": "error", "error": "Nothing logged yet: the file does not exist"})
+        from .files import _launch
+        return jsonify(_launch(target, select=False))
+
     @app.route("/api/identities/create", methods=["POST"])
     def api_identities_create():
         payload = request.get_json(silent=True) or {}
@@ -789,38 +1267,12 @@ def register_routes(app, browser) -> None:
         response.headers["Cache-Control"] = "no-store"
         return response
 
-    @app.route("/api/identities/ephemeral/toggle", methods=["POST"])
-    def api_identities_ephemeral_toggle():
-        """
-        The ephemeral switch. On: use the throwaway identity instead of the
-        saved ones. Off: back to the saved identity that was in use before.
-        """
-        payload = request.get_json(silent=True) or {}
-
-        def toggle():
-            if payload.get("on"):
-                browser.switch_identity("ephemeral")
-            else:
-                browser.switch_identity(browser.identities.fixed_to_return_to())
-        return _identity_action(toggle)
-
-    @app.route("/api/identities/ephemeral/rotate", methods=["POST"])
-    def api_identities_rotate():
-        return _identity_action(lambda: {"dropped": browser.rotate_ephemeral()})
-
-    @app.route("/api/identities/ephemeral/keep", methods=["POST"])
-    def api_identities_keep():
-        payload = request.get_json(silent=True) or {}
-        return _identity_action(lambda: {"created": browser.keep_ephemeral(payload.get("name"))["id"]})
-
     @app.route("/api/identities/options", methods=["POST"])
     def api_identities_options():
         payload = request.get_json(silent=True) or {}
         auto = payload.get("auto_identify")
         return _identity_action(lambda: browser.identities.set_options(
-            auto_identify=None if auto is None else bool(auto),
-            ephemeral_mode=payload.get("ephemeral_mode"),
-            ephemeral_interval=payload.get("ephemeral_interval")))
+            auto_identify=None if auto is None else bool(auto)))
 
     @app.route("/api/identities/bindings", methods=["POST"])
     def api_identities_bindings():
@@ -970,6 +1422,91 @@ def register_routes(app, browser) -> None:
             out.append({"kind": "DDNS", "url": f"http://{domain}:{port}",
                         "ok": (s.get("ddns") or {}).get("state") == "ok"})
         return out
+
+    @app.route("/api/monitor")
+    def api_monitor():
+        """rB2 Monitor (MON tab): everything in one read, owner only."""
+        from . import monitor
+        settings = _server_settings()
+        addresses = {}
+        if settings is not None:
+            try:
+                addresses = dict(settings.addresses())
+                addresses["public"] = _public_addresses(settings)
+                addresses["running"] = dict(settings.running or {})
+            except Exception:
+                pass
+        return jsonify(monitor.snapshot(browser, addresses, _guests_for_owner()))
+
+    # ── Radio (rbrowser/radio.py, RADIO tab): the owner's call, or the guest's own ──
+    @app.route("/api/radio")
+    def api_radio():
+        return jsonify(browser.radio.status(request.args.get("t", "")))
+
+    @app.route("/api/radio/tune", methods=["POST"])
+    def api_radio_tune():
+        incoming = request.get_json(silent=True) or {}
+        return jsonify(browser.radio.tune(str(incoming.get("call_id", "")), incoming.get("quality")))
+
+    @app.route("/api/radio/stop", methods=["POST"])
+    def api_radio_stop():
+        return jsonify(browser.radio.hangup())
+
+    @app.route("/api/radio/quality", methods=["POST"])
+    def api_radio_quality():
+        return jsonify(browser.radio.set_quality(str((request.get_json(silent=True) or {}).get("quality", ""))))
+
+    @app.route("/api/radio/identity", methods=["POST"])
+    def api_radio_identity():
+        res = browser.radio.set_identity(str((request.get_json(silent=True) or {}).get("identity", "")))
+        return jsonify(res), (200 if res.get("status") == "success" else 400)
+
+    @app.route("/api/radio/station/<call_id>", methods=["POST", "DELETE"])
+    def api_radio_station(call_id):
+        radio = browser.radio
+        if not radio.start() or call_id not in radio.directory.stations:
+            return jsonify({"status": "error", "error": "Unknown station"}), 404
+        if request.method == "DELETE":
+            radio.directory.forget(call_id)
+        else:
+            incoming = request.get_json(silent=True) or {}
+            if "favorite" in incoming:
+                radio.directory.update(call_id, favorite=bool(incoming["favorite"]))
+        return jsonify({"status": "success"})
+
+    @app.route("/api/radio/refresh", methods=["POST"])
+    def api_radio_refresh():
+        return jsonify(browser.radio.refresh())
+
+    @app.route("/api/radio/command", methods=["POST"])
+    def api_radio_command():
+        incoming = request.get_json(silent=True) or {}
+        return jsonify(browser.radio.send_command(str(incoming.get("call_id", "")).strip().lower(),
+                                                  str(incoming.get("cmd", ""))))
+
+    @app.route("/api/radio/commands/<call_id>")
+    def api_radio_commands(call_id):
+        return jsonify(browser.radio.commands(call_id.strip().lower()))
+
+    @app.route("/api/radio/stream")
+    def api_radio_stream():
+        """Ogg Opus of the station in the call, for the tab's <audio>."""
+        resp = Response(browser.radio.stream(request.args.get("t", "")), mimetype="audio/ogg")
+        resp.headers["Cache-Control"] = "no-store"
+        resp.headers["X-Accel-Buffering"] = "no"
+        return resp
+
+    @app.route("/script/radio.js")
+    def serve_radio_js():
+        response = send_from_directory("script", "radio.js", mimetype="application/javascript")
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+    @app.route("/script/monitor.js")
+    def serve_monitor_js():
+        response = send_from_directory("script", "monitor.js", mimetype="application/javascript")
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
     @app.route("/api/node-list-settings", methods=["GET", "POST"])
     def api_node_list_settings():
@@ -1228,6 +1765,12 @@ def register_routes(app, browser) -> None:
         response.headers["Cache-Control"] = "no-cache"
         return response
 
+    @app.route("/script/stamper.js")
+    def serve_stamper_js():
+        response = send_from_directory("script", "stamper.js", mimetype="application/javascript")
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
     @app.route("/script/tooltips.js")
     def serve_tooltips_js():
         response = send_from_directory("script", "tooltips.js", mimetype="application/javascript")
@@ -1323,7 +1866,8 @@ def register_routes(app, browser) -> None:
                 }
         
         # Start download in background thread
-        thread = threading.Thread(target=do_download)
+        # The guest/owner view goes with it: a guest download stays on the guest's links.
+        thread = threading.Thread(target=contextvars.copy_context().run, args=(do_download,))
         thread.daemon = True
         thread.start()
         
@@ -1592,22 +2136,6 @@ def register_routes(app, browser) -> None:
              "short": "Unknown state", "color": "red"}
         )
 
-    @app.route("/templates/go.png")
-    def serve_go_icon():
-        return _serve_template_asset("go.png")
-
-    @app.route("/templates/star.png")
-    def serve_star_icon():
-        return _serve_template_asset("star.png")
-
-    @app.route("/templates/ping.png")
-    def serve_ping_icon():
-        return _serve_template_asset("ping.png")
-
-    @app.route("/templates/fingerprint.png")
-    def serve_fingerprint_icon():
-        return _serve_template_asset("fingerprint.png")
-    
     # The bundled page font. Declared before the catch-all below because
     # that one lets mimetypes guess, and a stock Windows Python does not
     # know .ttf - the file came back as application/octet-stream, which
@@ -1817,7 +2345,77 @@ def register_routes(app, browser) -> None:
     def rrc_input(address):
         incoming = request.get_json(silent=True) or {}
         return jsonify(browser.rrc.input(address, incoming.get("room"), incoming.get("text", ""),
-                                         bool(incoming.get("split")), incoming.get("fmt")))
+                                         bool(incoming.get("split")), incoming.get("fmt"), incoming.get("mc"),
+                                         incoming.get("sticker")))
+
+    # --- RRC stickers (rbrowser/stickers.py): reads open to guests, installs not ---
+
+    from .stickers import Stickers
+    stickers = Stickers()
+
+    @app.route("/api/rrc/stickers", methods=["GET"])
+    def rrc_stickers():
+        return jsonify(stickers.status())
+
+    @app.route("/api/rrc/stickers/<pack>/install", methods=["POST"])
+    def rrc_stickers_install(pack):
+        return jsonify(stickers.install(pack))
+
+    @app.route("/api/rrc/stickers/<pack>/remove", methods=["POST"])
+    def rrc_stickers_remove(pack):
+        return jsonify(stickers.remove(pack))
+
+    @app.route("/api/rrc/stickers/telegram/token", methods=["POST"])
+    def rrc_stickers_tg_token():
+        incoming = request.get_json(silent=True) or {}
+        return jsonify(stickers.set_token(incoming.get("token")))
+
+    @app.route("/api/rrc/stickers/telegram/import", methods=["POST"])
+    def rrc_stickers_tg_import():
+        incoming = request.get_json(silent=True) or {}
+        return jsonify(stickers.tg_import(incoming.get("link")))
+
+    @app.route("/api/rrc/stickers-lottie/<act>", methods=["POST"])
+    def rrc_stickers_lottie(act):
+        if act == "install":
+            return jsonify(stickers.lottie_install())
+        if act == "remove":
+            return jsonify(stickers.lottie_remove())
+        return jsonify({"status": "error", "error": "Unknown action"}), 404
+
+    @app.route("/api/rrc/stickers-lottie.js", methods=["GET"])
+    def rrc_stickers_lottie_js():
+        path = stickers.lottie_path()
+        if not path:
+            return jsonify({"status": "error", "error": "Not installed"}), 404
+        response = send_file(os.path.abspath(path), mimetype="text/javascript", max_age=86400 * 30)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
+    @app.route("/api/rrc/stickers/<pack>/<cp>", methods=["GET"])
+    def rrc_sticker_file(pack, cp):
+        thumb = request.args.get("thumb") == "1"
+        path = stickers.file_for(pack, cp, thumb)
+        if not path:
+            return jsonify({"status": "error", "error": "No such sticker"}), 404
+        if path.endswith(".tgs"):
+            data = stickers.tg_json(path)
+            if data is None:
+                return jsonify({"status": "error", "error": "Broken sticker"}), 404
+            response = app.response_class(data, mimetype="application/json")
+            response.headers["Cache-Control"] = "private, max-age=2592000"
+        else:
+            kind = {"webm": "video/webm", "webp": "image/webp", "jpg": "image/jpeg"}.get(path.rsplit(".", 1)[-1])
+            response = send_file(os.path.abspath(path), mimetype=kind, max_age=86400 * 30)
+        # SVGs from the packs: shown only as images, never run as a page.
+        response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
+    @app.route("/api/rrc/retry/<address>", methods=["POST"])
+    def rrc_retry(address):
+        incoming = request.get_json(silent=True) or {}
+        return jsonify(browser.rrc.retry(address, incoming.get("did")))
 
     @app.route("/api/rrc/join/<address>", methods=["POST"])
     def rrc_join(address):
@@ -2005,11 +2603,6 @@ def register_routes(app, browser) -> None:
     def messenger_cancel_incoming(resource_id):
         return jsonify(browser.messenger.cancel_incoming(resource_id))
 
-    @app.route("/api/messenger/keep-ephemeral", methods=["POST"])
-    def messenger_keep_ephemeral():
-        incoming = request.get_json(silent=True) or {}
-        return jsonify(browser.messenger.keep_ephemeral(incoming.get("name")))
-
     @app.route("/api/messenger/contact/<peer>", methods=["POST"])
     def messenger_add_contact(peer):
         incoming = request.get_json(silent=True) or {}
@@ -2192,10 +2785,16 @@ def register_routes(app, browser) -> None:
         print(f"API Response: {response.get('reachable', response.get('error'))}")
         return jsonify(response)
 
+    def _hidden_from_guest(kind):
+        return guest_view() and not (auth is not None and auth.guest_sees(kind))
+
     # History - see rbrowser/history.py. Written only by page visits.
     @app.route('/api/history', methods=['GET'])
     def get_history():
-        return jsonify({'status': 'success', **browser.history.snapshot()})
+        snap = browser.history.snapshot()
+        if _hidden_from_guest("history"):
+            snap = {**snap, "entries": []}
+        return jsonify({'status': 'success', **snap})
 
     @app.route('/api/history/settings', methods=['POST'])
     def save_history_settings():
@@ -2214,7 +2813,8 @@ def register_routes(app, browser) -> None:
     @app.route('/api/favorites', methods=['GET'])
     def get_favorites():
         try:
-            return jsonify({'status': 'success', 'favorites': browser.favorites.load(),
+            shown = [] if _hidden_from_guest("favorites") else browser.favorites.load()
+            return jsonify({'status': 'success', 'favorites': shown,
                             'revision': browser.favorites.revision})
         except Exception as e:
             return jsonify({'status': 'error', 'error': str(e)})
@@ -2284,13 +2884,5 @@ def _media_mimetype(filename: str) -> str:
         return _MEDIA_MIMETYPES[ext]
     guessed, _ = mimetypes.guess_type(filename)
     return guessed or "application/octet-stream"
-
-
-def _serve_template_asset(filename: str):
-    try:
-        return send_from_directory("templates", filename, mimetype="image/png")
-    except Exception as exc:
-        print(f"❌ Error serving {filename}: {exc}")
-        return "", 404
 
 

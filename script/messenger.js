@@ -10,7 +10,6 @@ const Messenger = {
     conversations: [],
     revision: -1,
     shownRevision: -1,
-    ephemeralOk: false,     // "send anyway" for this session
     pollTimer: null,
     names: {},              // announced names read by the chat: {address: name}
     pending: [],            // files to go with the next message (File objects)
@@ -414,7 +413,7 @@ function renderMessengerIdentity() {
     const st = Messenger.state;
     if (!box || !st) return;
     const myName = st.settings ? st.settings.display_name || '' : '';
-    const key = [st.running, st.address, st.identity_name, st.ephemeral, (st.identities || []).length, st.error,
+    const key = [st.running, st.address, st.identity_name, (st.identities || []).length, st.error,
                  myName, st.address ? avatarHue(st.address) : '', st.unread_other || 0].join('|');
     if (key === Messenger.identityKey) return;
     Messenger.identityKey = key;
@@ -422,14 +421,13 @@ function renderMessengerIdentity() {
         box.className = 'msg-identity off';
         box.innerHTML = `<span class="msg-identity-name">${escapeHtml(st.error || 'Not listening')}</span><span class="msg-caret">▾</span>`;
     } else {
-        box.className = 'msg-identity' + (st.ephemeral ? ' ephemeral' : '');
+        box.className = 'msg-identity';
         // Narrow bar: only the dot and this icon show (style.css, msgbar).
         box.title = `Writing as ${st.identity_name} (${st.address}) - click to change`;
         box.innerHTML = `<span class="msg-dot"></span>`
             + `<span class="msg-identity-icon" aria-hidden="true">${IDENTITY_ICON}</span>`
             + `<span class="msg-identity-name">${escapeHtml(st.identity_name)}</span>`
             + `<code>${escapeHtml(st.address)}</code>`
-            + (st.ephemeral ? '<span class="msg-eph-timer" id="msg-eph-timer"></span>' : '')
             // Unread on our other identities: they listen too.
             + (st.unread_other ? `<span class="msg-other-unread" title="${st.unread_other} unread on your other identities - open the menu">${
                 st.unread_other > 99 ? '99+' : st.unread_other}</span>` : '')
@@ -437,56 +435,7 @@ function renderMessengerIdentity() {
     }
     box.onclick = e => { e.stopPropagation(); toggleIdentityMenu(); };
     renderMessengerMe(st, myName);
-    tickEphemeralTimer();
 }
-
-// The ephemeral identity's change, in the identity button: a countdown when
-// it is on a timer (ticks every second between polls), else when it goes.
-function tickEphemeralTimer() {
-    const els = document.querySelectorAll('.msg-eph-timer');
-    const st = Messenger.state || {};
-    if (!els.length || !st.ephemeral) return;
-    const rot = st.ephemeral_rotation || {};
-    let text, title;
-    if (rot.mode === 'timed' && rot.seconds != null) {
-        const left = Math.max(0, Math.round((Messenger.ephDue - Date.now()) / 1000));
-        text = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
-        title = `The ephemeral identity changes in ${durationText(left)}: replies that arrive after that are lost`;
-    } else {
-        text = rot.mode === 'reload' ? 'until reload' : 'until restart';
-        title = `The ephemeral identity changes ${ephemeralChangeText(st)}`;
-    }
-    els.forEach(el => {
-        if (el.textContent !== text) el.textContent = text;
-        el.title = title;
-    });
-}
-
-// The ephemeral identity in use becomes a saved one: same address, its
-// chats kept on disk, reachable from now on (messenger.keep_ephemeral).
-async function messengerKeepEphemeral() {
-    const st = Messenger.state || {};
-    const name = await askText('Keep this ephemeral identity',
-        `It becomes a saved identity with the same address <code>${escapeHtml(shortAddr(st.address || ''))}</code>: `
-        + 'its conversations are kept, it no longer changes, and people can write to it later. Name of the identity:',
-        (st.settings && st.settings.display_name) || 'Kept identity', 'Keep');
-    if (name === null || name === undefined) return;
-    const res = await fetch('/api/messenger/keep-ephemeral', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-    }).then(r => r.json()).catch(e => ({ status: 'error', error: e.message }));
-    if (res.status !== 'success') {
-        showNotification(`Not kept: ${escapeHtml(res.error || 'error')}`, 'error', 5000);
-        return;
-    }
-    showNotification(`Kept as <b>${escapeHtml(res.name)}</b>: same address, now a saved identity`, 'success', 4500);
-    if (typeof loadIdentityState === 'function') loadIdentityState();
-    Messenger.identityKey = null;
-    await pollMessenger();
-    refreshMessenger(false);
-}
-
-setInterval(tickEphemeralTimer, 1000);
 
 // Us, before the identity: our avatar (click = customize, like a contact's)
 // and the name announced for this identity, with the pencil to change it.
@@ -511,12 +460,8 @@ async function editMyName() {
     if (!st.running || !st.settings) return;
     const identity = st.settings.identity;
     const current = st.settings.display_name || '';
-    const html = (st.ephemeral
-        ? 'The name of this ephemeral identity. It goes out only when you press Announce; '
-          + 'empty: back to <b>eph_</b> and the first 4 characters of the address.'
-        : `The name others see for <b>${escapeHtml(st.identity_name || '')}</b>: it is announced at once. `
-          + 'Empty: Anonymous Peer.')
-        + ' Each identity keeps its own.';
+    const html = `The name others see for <b>${escapeHtml(st.identity_name || '')}</b>: it is announced at once. `
+        + (window.rbGuest ? 'Empty: your guest name.' : 'Empty: Anonymous Peer. Each identity keeps its own.');
     const name = await askText('Your name', html, current, 'Save');
     if (name === null || name === undefined) return;
     let res;
@@ -533,7 +478,7 @@ async function editMyName() {
         return;
     }
     showNotification(`Your name: <b>${escapeHtml(res.name || 'Anonymous Peer')}</b>`
-        + (res.announced ? '<br>Announced' : (st.ephemeral ? '<br>Press Announce to send it' : '')), 'success', 3500);
+        + (res.announced ? '<br>Announced' : ''), 'success', 3500);
     Messenger.identityKey = null;
     await pollMessenger();
     renderMessengerIdentity();
@@ -549,25 +494,20 @@ function toggleIdentityMenu(force) {
     const current = st.settings ? st.settings.identity : '';
     menu.innerHTML = '<div class="msg-menu-head">Write as</div>'
         + (st.identities || []).map(i => `
-            <button class="msg-menu-item${i.id === current ? ' current' : ''}${i.id === 'ephemeral' ? ' ephemeral' : ''}" data-id="${escapeHtml(i.id)}">
+            <button class="msg-menu-item${i.id === current ? ' current' : ''}" data-id="${escapeHtml(i.id)}">
                 ${avatarHtml(i.address, i.name, 'small', false)}
-                <span class="msg-menu-text"><b>${escapeHtml(i.name)}${i.id === 'ephemeral' && st.ephemeral
-                    ? ' <span class="msg-eph-timer"></span>' : ''}</b>${i.display_name
+                <span class="msg-menu-text"><b>${escapeHtml(i.name)}</b>${i.display_name
                     ? `<span class="msg-menu-nick">as ${escapeHtml(i.display_name)}</span>` : ''}<code>${escapeHtml(i.address)}</code></span>
                 ${i.unread && i.id !== current ? `<span class="msg-conv-unread" title="${i.unread} unread">${i.unread > 99 ? '99+' : i.unread}</span>` : ''}
                 ${i.id === current ? '<span class="msg-menu-check">✓</span>' : ''}
             </button>`).join('')
         + (st.address ? `<div class="msg-menu-sep"></div>
             <button class="msg-menu-item plain" data-copy="1">Copy my LXMF address</button>` : '')
-        + (st.ephemeral && st.running ? `<button class="msg-menu-item plain" data-keep="1"
-            title="Same address, no longer changing: its conversations are kept">Keep this ephemeral as a saved identity…</button>` : '')
         + '<button class="msg-menu-item plain" data-settings="1">Messenger settings…</button>';
-    tickEphemeralTimer();
     menu.querySelectorAll('.msg-menu-item').forEach(btn => btn.onclick = async e => {
         e.stopPropagation();
         toggleIdentityMenu(false);
         if (btn.dataset.copy) return copyText(st.address, 'Your LXMF address copied');
-        if (btn.dataset.keep) return messengerKeepEphemeral();
         if (btn.dataset.settings) return openMessengerSettings();
         if (btn.dataset.id === current) return;
         // The chat open stays open: the same contact, now as the other
@@ -601,8 +541,6 @@ async function pollMessenger() {
     } catch (e) {
         return;
     }
-    const rot = Messenger.state.ephemeral_rotation;
-    if (rot && rot.seconds != null) Messenger.ephDue = Date.now() + rot.seconds * 1000;
     applyMessengerVisibility();
     applyAvatarColors();
     notifyIncoming(Messenger.state.incoming);
@@ -637,10 +575,10 @@ async function pollMessenger() {
 }
 
 // The Sync button in the bar and the 📮 "via propagation node" switch next to
-// Send: usable with a propagation node and a saved identity only.
+// Send: usable with a propagation node only.
 function propagationUsable() {
     const p = (Messenger.state && Messenger.state.propagation) || {};
-    return !!(Messenger.state && Messenger.state.running && p.node && !p.ephemeral);
+    return !!(Messenger.state && Messenger.state.running && p.node);
 }
 
 function renderPropagationControls() {
@@ -669,7 +607,6 @@ function renderPropagationControls() {
 function propagationBlocker() {
     const p = (Messenger.state && Messenger.state.propagation) || {};
     if (!Messenger.state || !Messenger.state.running) return 'The messenger is off';
-    if (p.ephemeral) return 'Propagation nodes are for saved identities only, not the ephemeral one';
     if (!p.node) return p.mode === 'off' ? 'Propagation is off (Settings > LXMF Messenger)'
                                          : 'No propagation node heard yet (Settings > LXMF Messenger)';
     return '';
@@ -1035,6 +972,7 @@ function sharedContactsHtml(shown) {
 }
 
 async function toggleFavoriteContact(peer) {
+    if (guestNoFavorites()) return;
     const on = !isFavoriteContact(peer);
     const d = await fetch(`/api/messenger/favorite/${encodeURIComponent(peer)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1446,13 +1384,9 @@ function renderChatTabs() {
     const strip = document.getElementById('msg-tabs');
     if (!strip) return;
     const st = Messenger.state || {};
-    // An identity that is gone, or an ephemeral one that has changed: its
-    // chats went with it.
+    // An identity that is gone: its chats went with it.
     const ids = st.identities || [];
-    Messenger.tabs = Messenger.tabs.filter(t => {
-        const i = ids.find(x => x.id === t.id);
-        return i && (t.id !== 'ephemeral' || !t.me || t.me === i.address);
-    });
+    Messenger.tabs = Messenger.tabs.filter(t => ids.some(x => x.id === t.id));
     strip.hidden = !Messenger.tabs.length;
     const current = currentIdentityId();
     const activeKey = Messenger.peer ? chatTabKey(current, Messenger.peer) : '';
@@ -2396,11 +2330,11 @@ async function showFileMenu(anchor, peer, localId, index) {
     const f = m && m.files && m.files[index];
     if (!f) return;
     const gone = !!f.deleted;
-    const where = m.dir === 'in' ? (f.path ? `downloads/${f.path}` : 'kept in memory (ephemeral identity)')
+    const where = m.dir === 'in' ? (f.path ? `downloads/${f.path}` : 'kept in memory')
                                  : 'copy of a file you sent';
     openNodeMenu(anchor, f.name, `${sizeText(f.size || 0)} - ${where}`, [
         { label: 'Open', disabled: gone, run: () => window.open(fileUrl(peer, localId, index), '_blank', 'noopener'),
-          tip: 'In a new browser tab (images and PDF), otherwise it is saved' },
+          tip: 'Open this file in a new browser tab' },
         { label: 'Download', disabled: gone, run: () => {
               const a = document.createElement('a');
               a.href = fileUrl(peer, localId, index, true);
@@ -2408,12 +2342,12 @@ async function showFileMenu(anchor, peer, localId, index) {
               document.body.appendChild(a);
               a.click();
               a.remove();
-          }, tip: 'Save it with the browser, on this device' },
+          }, tip: 'Save this file on this device' },
         ...(rbrowserIsLocal() && f.path ? [{ label: 'Show in folder', disabled: gone,
             run: () => fetch(fileUrl(peer, localId, index) + '/show', { method: 'POST' }).then(r => r.json())
                 .then(d => { if (d.status !== 'success') showNotification(escapeHtml(d.error || 'Not found'), 'error', 5000); }),
-            tip: 'Open the downloads folder on this computer' }] : []),
-        { label: 'Copy name', run: () => copyText(f.name, 'File name copied') },
+            tip: 'Show this file in its folder on this computer' }] : []),
+        { label: 'Copy name', run: () => copyText(f.name, 'File name copied'), tip: 'Copy the name of this file' },
         '-',
         { label: 'Delete file', danger: true, disabled: gone, run: async () => {
               const ok = await confirmDialog('Delete file', `<b>${escapeHtml(f.name)}</b> is removed from
@@ -2423,7 +2357,7 @@ async function showFileMenu(anchor, peer, localId, index) {
                   .then(r => r.json()).catch(e => ({ status: 'error', error: e.message }));
               if (d.status !== 'success') showNotification(escapeHtml(d.error || 'Not deleted'), 'error', 5000);
               refreshMessenger(false);
-          }, tip: 'Remove the file; the message stays, marked deleted' },
+          }, tip: 'Delete this file, the message stays' },
     ]);
 }
 
@@ -2543,7 +2477,6 @@ function pinnedToBottom() {
 }
 
 async function messengerRetry(peer, localId) {
-    if (!(await confirmEphemeralSend())) return;
     const d = await fetch(`/api/messenger/retry/${encodeURIComponent(peer)}/${encodeURIComponent(localId)}`, { method: 'POST' })
         .then(r => r.json()).catch(e => ({ status: 'error', error: e.message }));
     if (d.status !== 'success') showNotification(escapeHtml(d.error || 'Not sent'), 'error', 5000);
@@ -2613,62 +2546,11 @@ function messengerBack() {
 
 // ─── Sending ────────────────────────────────────────────────
 
-function ephemeralChangeText(st) {
-    const rot = st.ephemeral_rotation || {};
-    if (rot.mode === 'timed' && rot.seconds != null) return `in ${durationText(rot.seconds)}`;
-    if (rot.mode === 'reload') return 'when this page is reloaded';
-    return 'when rBrowser restarts';
-}
-
-function confirmEphemeralSend() {
-    const st = Messenger.state || {};
-    if (!st.ephemeral || Messenger.ephemeralOk) return Promise.resolve(true);
-    // Enter in the text box while the question is up asked it again, one
-    // dialog over the other, and each one sent: one question at a time,
-    // and Enter / Esc answer it.
-    if (Messenger.ephemeralAsking) return Promise.resolve(false);
-    Messenger.ephemeralAsking = true;
-    return new Promise(resolve => {
-        const overlay = document.createElement('div');
-        overlay.className = 'auto-reload-modal';
-        overlay.innerHTML = `<div class="auto-reload-dialog msg-warn-dialog">
-            <div class="dialog-header"><h3>Ephemeral identity</h3></div>
-            <div class="settings-hint">You are writing as a throwaway identity. It changes
-                <b>${escapeHtml(ephemeralChangeText(st))}</b>: replies that arrive after that are lost,
-                and nobody can write to this address again.</div>
-            <label class="cache-search-exact"><input name="msg-warn-session" type="checkbox" class="msg-warn-session"> don't ask again until the page is reloaded</label>
-            <div class="auto-reload-actions">
-                <button class="btn-cancel">Cancel</button>
-                <button class="btn-save">Send</button>
-            </div></div>`;
-        const onKey = e => {
-            if (e.key !== 'Enter' && e.key !== 'Escape') return;
-            e.preventDefault();
-            e.stopPropagation();
-            done(e.key === 'Enter');
-        };
-        const done = ok => {
-            if (ok && overlay.querySelector('.msg-warn-session').checked) Messenger.ephemeralOk = true;
-            document.removeEventListener('keydown', onKey, true);
-            Messenger.ephemeralAsking = false;
-            overlay.remove();
-            resolve(ok);
-        };
-        overlay.querySelector('.btn-cancel').onclick = () => done(false);
-        overlay.querySelector('.btn-save').onclick = () => done(true);
-        overlay.addEventListener('click', e => { if (e.target === overlay) done(false); });
-        document.addEventListener('keydown', onKey, true);
-        document.body.appendChild(overlay);
-        overlay.querySelector('.btn-save').focus();
-    });
-}
-
 async function messengerSend(peer, input) {
     const content = input.value;
     const chat = input.closest('#msg-chat');
     const files = (Messenger.pendingPeer === peer && Messenger.pending) || [];
     if (!content.trim() && !files.length) return;
-    if (!(await confirmEphemeralSend())) return;
     const via = input.closest('.msg-compose') && input.closest('.msg-compose').querySelector('.msg-via-pn');
     const propagated = !!(via && !via.hidden && via.classList.contains('active'));
     const reply = Messenger.replyTo && Messenger.replyTo.peer === peer ? Messenger.replyTo : null;
@@ -2827,7 +2709,7 @@ async function sendAddressTo(address, name) {
     const ok = await confirmDialog('Send address',
         `To <b>${escapeHtml(target.label)}</b> <code>${escapeHtml(target.peer)}</code>, this message:`
         + `<pre class="send-addr-preview">${escapeHtml(text)}</pre>`, 'Send');
-    if (!ok || !(await confirmEphemeralSend())) return;
+    if (!ok) return;
     let data;
     try {
         data = await fetch('/api/messenger/send', { method: 'POST', headers: { 'Content-Type': 'application/json' },

@@ -1,5 +1,5 @@
 """
-Remote access (Settings > System Setup > Remote access).
+Remote Tunnel (Settings > Access & Remote > Remote Tunnel).
 
 Two independent pieces:
 
@@ -350,7 +350,7 @@ class Remote:
             except subprocess.TimeoutExpired:
                 proc.kill()
             if not quiet:
-                _log("🔌 Remote access tunnel stopped")
+                _log("🔌 Remote Tunnel stopped")
         try:
             os.remove(PID_FILE)
         except OSError:
@@ -379,7 +379,7 @@ class Remote:
             except Exception as exc:
                 if gen == self._gen:
                     self.tunnel_state, self.tunnel_error = "error", str(exc)
-                _log(f"⚠️ Remote access tunnel: {exc}")
+                _log(f"⚠️ Remote Tunnel: {exc}")
             for _ in range(wait):
                 if not self._wanted(gen):
                     return
@@ -390,7 +390,9 @@ class Remote:
 
     def _run(self, binary: str, gen: int) -> bool:
         """True when it gave an address (then died): worth trying again soon."""
-        command = [binary, "tunnel", "--no-autoupdate", "--url", f"http://{self.host}:{self.port}"]
+        command = [binary, "tunnel", "--no-autoupdate", "--url", f"http://{self.host}:{self.port}",
+                   # A small idle pool: its default of 100 took every connection rBrowser accepts.
+                   "--proxy-keepalive-connections", "20", "--proxy-keepalive-timeout", "30s"]
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                                 text=True, encoding="utf-8", errors="replace", creationflags=flags)
@@ -414,7 +416,7 @@ class Remote:
             if found and not got and gen == self._gen:
                 got = True
                 self.tunnel_url, self.tunnel_state, self.tunnel_error = found.group(0), "on", ""
-                _log(f"🌍 Remote access: {self.tunnel_url}")
+                _log(f"🌍 Remote Tunnel: {self.tunnel_url}")
         proc.wait()
         if self._wanted(gen):
             self.tunnel_state = "error"

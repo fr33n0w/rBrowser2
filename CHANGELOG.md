@@ -3,6 +3,64 @@
 What changes in each version. rBrowser reads this file from GitHub when an
 update is out, and shows the new entries in Settings > About.
 
+## 2.0.7b - 2026-11-23
+
+- Added Radio tab (radio-lxst).
+- Radio: identity picker, guests allowed.
+- Radio: sends your name to stations.
+- Radio: station commands pane.
+- Radio: shows subscribed stations.
+- Radio: station state asked, not announced.
+- Radio: station list scrolls in place.
+- Radio: track bar and live text.
+- Radio: Next and Random buttons.
+- Radio: retries a station not found.
+- Radio: quality applies at once.
+- Radio: fewer gaps after Play.
+- Added RRC Micron colours and art (thanks mmoyles87).
+- Added RRC Markdown as NomadNet.
+- Added RRC ASCII fonts and decorations.
+- Added RRC stickers.
+- Added Telegram sticker sets.
+- Added recent stickers and previews.
+- Fixed outline emoji on Windows.
+- Fixed nodes asking link stamps.
+- Link stamps on all CPU cores.
+- Added RRC colours sent to NomadNet.
+- Fixed RRC bold text.
+- Fixed RRC mentions in reply quotes.
+- Fixed NomadNet pages all in bold.
+- Added light theme.
+- Added identity hash in Saved identities.
+- Added node links closed with their tab.
+- Removed ephemeral identity.
+- Added guest actions log.
+- Added guest identity in NomadNet and BBS (thanks dr4kk4r).
+- Added guest switches for favorites and history.
+- Fixed guest mode switch off.
+- Added guest identity in RRC.
+- Added fixed RRC hub for guests.
+- Added own identity for each guest.
+- Added guest LXMF text log switch.
+- Added unsaved changes reminder in Settings.
+- Added guest theme switch.
+- Added rB2 Monitor (MON tab).
+- Fixed guests reading owner settings.
+- Fixed false unsaved changes in Settings.
+- Fixed splash screen switch.
+- Changed NomadNet top bar icons.
+- Added guests online list and count.
+- Added notice when main instance stops.
+- Added guest access log.
+- Added guest notice when access closes.
+- Added faster tooltips everywhere.
+- Added tooltips on every menu item.
+- Added RRC delivery check and Retry.
+- Fixed Update now stuck on Windows.
+- Added --set-password and --guest-setup.
+- Added log out in the status bar.
+- Added guest sessions kept across restarts.
+
 ## 2.0.6b - 2026-11-05
 
 - Added app window mode (--app).

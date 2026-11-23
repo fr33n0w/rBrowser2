@@ -46,6 +46,8 @@ class RnsWatch:
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._read_failed = False
+        self.raw: Optional[Dict[str, Any]] = None
+        self.raw_at = 0.0
 
     def status(self) -> Dict[str, Any]:
         with self._lock:
@@ -59,7 +61,10 @@ class RnsWatch:
         if r is None:
             return
         try:
-            now = network_interfaces(r.get_interface_stats())
+            stats = r.get_interface_stats()
+            self.raw = stats if isinstance(stats, dict) else None    # rB2 Monitor reads it
+            self.raw_at = self.clock()
+            now = network_interfaces(stats)
         except Exception as exc:
             if not self._read_failed:
                 print(f"⚠️ Could not read Reticulum's interfaces: {exc}")

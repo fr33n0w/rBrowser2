@@ -29,9 +29,13 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 # so the log goes to settings/app.log.
 NO_CONSOLE = sys.stdout is None
 if NO_CONSOLE and "--open" not in sys.argv[1:]:
+    # The window process has its own log: on app.log it truncated the server's.
+    _log = os.path.join("settings", "window.log" if "--window" in sys.argv[1:] else "app.log")
     try:
         os.makedirs("settings", exist_ok=True)
-        sys.stdout = sys.stderr = open(os.path.join("settings", "app.log"), "w", encoding="utf-8", buffering=1)
+        if os.path.exists(_log):
+            os.replace(_log, _log + ".1")   # the previous run's, to see why it stopped
+        sys.stdout = sys.stderr = open(_log, "w", encoding="utf-8", buffering=1)
     except OSError:
         pass
 
@@ -56,6 +60,11 @@ if "--info" in sys.argv[1:]:
     _info_args, _ = _info.parse_known_args()
     from rbrowser.info import run_info
     sys.exit(run_info(_info_args.port))
+
+# Access password / Guest mode from the terminal (rbrowser/cli_auth.py), before any start.
+if "--set-password" in sys.argv[1:] or "--guest-setup" in sys.argv[1:]:
+    from rbrowser.cli_auth import run as run_cli_auth
+    sys.exit(run_cli_auth(sys.argv[1:]))
 
 # The desktop window (rbrowser/appwindow.py), a process of its own started
 # by an rBrowser run with --app: nothing of the server is set up here.
@@ -177,7 +186,10 @@ def start_server(flask_app: Flask, host: str = "0.0.0.0", port: int = 5000) -> N
         # an LXMF info) for up to a minute, mostly asleep. With 8 threads a
         # few of them filled the server and everything else queued
         # ("Task queue depth", the UI froze): more threads cost little.
-        serve(flask_app, host=host, port=port, threads=24)
+        from rbrowser import stall
+        stall.install()
+        # The tunnel keeps idle connections open: 100 (the default) filled up with guests.
+        serve(flask_app, host=host, port=port, threads=24, connection_limit=400)
     except ImportError:
         logging.getLogger("werkzeug").setLevel(logging.ERROR)
         print("⚠️  Waitress not found, falling back to Flask dev server...")
@@ -207,6 +219,10 @@ def main() -> int:
     parser.add_argument("--info", action="store_true",
                         help="Show the state of the rBrowser already running here, then follow its log "
                              "(with --port N for one on another port)")
+    parser.add_argument("--set-password", action="store_true",
+                        help="Set the access password and switch it on, then exit (rBrowser stopped)")
+    parser.add_argument("--guest-setup", action="store_true",
+                        help="Set up Guest mode with a few questions, then exit (rBrowser stopped)")
     parser.add_argument("--app", action="store_true",
                         help="Open rBrowser in a window of its own (needs requirements-app.txt); "
                              "closing it stops rBrowser")
@@ -304,12 +320,15 @@ def main() -> int:
             server.join(0.5)
             browser.run_main_thread_tasks()
             if window is not None and window.poll() is not None:
+                print(f"🪟 rBrowser window ended (exit code {window.returncode})")
                 raise KeyboardInterrupt   # the window was closed: same as Ctrl+C
         print("❌ The web server stopped - see the message above (is the port already in use?)")
         return 1
 
     except KeyboardInterrupt:
         print("\n👋 NomadNet Browser shutting down...")
+        from rbrowser.server_settings import run_before_exit
+        run_before_exit()
         try:
             browser.remote.shutdown()   # cloudflared goes with us
         except Exception:

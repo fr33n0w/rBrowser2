@@ -15,18 +15,9 @@ means having more than one identity. That is all this module does:
 - **Profiles**: identities kept on disk, with a name. The original
   `nomadnet_browser_identity` file is the "Default" profile, unchanged, so
   nothing a node already knows you by is lost.
-- **Ephemeral**: a throwaway identity that only lives in memory. It is
-  replaced at every start, and also at every page reload or every set
-  interval (30 s to 1 h) if asked to. "Keep" turns the
-  current one into a profile, which is the only way to come back to an
-  account made with it.
 - **Bindings**: which identity you first identified to each node with.
   Auto-identify uses it, and the UI warns before identifying to a node as
   somebody else.
-
-RNS 1.5 also has an "ephemeral transport identity", rerolled at every start
-when transport is off. That one is unrelated: it is the identity of the RNS
-instance itself, and the nodes you browse never see it.
 """
 
 from __future__ import annotations
@@ -37,17 +28,12 @@ import re
 import secrets
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import RNS
 
 
-EPHEMERAL = "ephemeral"
 DEFAULT_ID = "default"
-EPHEMERAL_MODES = ("session", "reload", "timed")
-# Timed mode: a new ephemeral identity every so often. Seconds.
-EPHEMERAL_INTERVALS = (30, 60, 120, 300, 600, 900, 1800, 3600)
-DEFAULT_INTERVAL = 300
 
 _HASH_RE = re.compile(r"^[0-9a-f]{32}$")
 _ID_RE = re.compile(r"^[a-z0-9]{1,32}$")
@@ -70,7 +56,7 @@ def describe_identity(identity: Optional[RNS.Identity]) -> Dict[str, str]:
 
 
 class IdentityManager:
-    """Profiles, the ephemeral identity, and per-node bindings."""
+    """Profiles and per-node bindings."""
 
     LEGACY_FILE = "nomadnet_browser_identity"
     PROFILE_DIR = "identities"
@@ -90,23 +76,11 @@ class IdentityManager:
         self._loaded: Dict[str, RNS.Identity] = {}
         self._broken: set = set()
 
-        # The ephemeral identity and the nodes identified to with it. Never
-        # written to disk: that is what makes it ephemeral.
-        self._ephemeral = RNS.Identity()
-        self._ephemeral_nodes: List[str] = []
-        # When the timed countdown started: at start-up, at each new
-        # ephemeral identity, and when ephemeral or its interval is set.
-        self._ephemeral_since = time.time()
-
         self.state: Dict[str, Any] = {
             "active": DEFAULT_ID,
             "profiles": [],
             "bindings": {},
             "auto_identify": False,
-            # The saved identity to go back to when ephemeral is switched off.
-            "last_fixed": DEFAULT_ID,
-            "ephemeral_mode": "session",
-            "ephemeral_interval": DEFAULT_INTERVAL,
         }
         self._load()
 
@@ -149,16 +123,9 @@ class IdentityManager:
             node: pid for node, pid in (bindings.items() if isinstance(bindings, dict) else [])
             if clean_node_hash(node) and pid in known
         }
-        if self.state.get("ephemeral_mode") not in EPHEMERAL_MODES:
-            self.state["ephemeral_mode"] = "session"
-        if self.state.get("ephemeral_interval") not in EPHEMERAL_INTERVALS:
-            self.state["ephemeral_interval"] = DEFAULT_INTERVAL
         self.state["auto_identify"] = bool(self.state.get("auto_identify"))
-        if self.state.get("active") != EPHEMERAL and self.state.get("active") not in known:
+        if self.state.get("active") not in known:
             self.state["active"] = DEFAULT_ID
-        if self.state.get("last_fixed") not in known:
-            self.state["last_fixed"] = (self.state["active"] if self.state["active"] != EPHEMERAL
-                                        else DEFAULT_ID)
 
         # The default identity must exist before anything asks for it: it is
         # created on first run exactly as rBrowser always has.
@@ -184,10 +151,8 @@ class IdentityManager:
         return self._path(profile["file"]) if profile else None
 
     def identity_for(self, profile_id: str) -> Optional[RNS.Identity]:
-        """The identity behind a profile id (or the ephemeral one)."""
+        """The identity behind a profile id."""
         with self._lock:
-            if profile_id == EPHEMERAL:
-                return self._ephemeral
             if profile_id in self._loaded:
                 return self._loaded[profile_id]
             if profile_id in self._broken:
@@ -222,35 +187,17 @@ class IdentityManager:
         return self.identity_for(self.active_id)
 
     def name_of(self, profile_id: str) -> str:
-        if profile_id == EPHEMERAL:
-            return "Ephemeral"
         profile = self._profile(profile_id)
         return profile["name"] if profile else profile_id
 
     def set_active(self, profile_id: str) -> None:
         with self._lock:
-            if profile_id != EPHEMERAL and not self._profile(profile_id):
+            if not self._profile(profile_id):
                 raise ValueError("No such identity")
             if self.identity_for(profile_id) is None:
                 raise ValueError("That identity file cannot be loaded")
-            if profile_id == EPHEMERAL and self.state["active"] != EPHEMERAL:
-                # Timed: the countdown runs from when ephemeral is switched on.
-                self._ephemeral_since = time.time()
             self.state["active"] = profile_id
-            if profile_id != EPHEMERAL:
-                self.state["last_fixed"] = profile_id
             self._save()
-
-    def fixed_to_return_to(self) -> str:
-        """
-        The saved identity ephemeral mode was switched on from - where
-        switching it off goes back to. The default if that one is gone or
-        no longer loads.
-        """
-        last = self.state.get("last_fixed") or DEFAULT_ID
-        if self._profile(last) and self.identity_for(last) is not None:
-            return last
-        return DEFAULT_ID
 
     # ------------------------------------------------------------------ #
     # Profiles                                                           #
@@ -316,8 +263,6 @@ class IdentityManager:
             self.state["profiles"].remove(profile)
             self.state["bindings"] = {n: p for n, p in self.state["bindings"].items()
                                       if p != profile_id}
-            if self.state.get("last_fixed") == profile_id:
-                self.state["last_fixed"] = DEFAULT_ID
             self._loaded.pop(profile_id, None)
             self._broken.discard(profile_id)
             self._save()
@@ -327,53 +272,6 @@ class IdentityManager:
                 pass
 
     # ------------------------------------------------------------------ #
-    # Ephemeral                                                          #
-    # ------------------------------------------------------------------ #
-
-    def rotate_ephemeral(self) -> List[str]:
-        """
-        Replace the ephemeral identity. Returns the nodes the old one had
-        identified to: any account made with it is now out of reach.
-        """
-        with self._lock:
-            dropped = list(self._ephemeral_nodes)
-            self._ephemeral = RNS.Identity()
-            self._ephemeral_nodes = []
-            self._ephemeral_since = time.time()
-            return dropped
-
-    def next_rotation(self) -> Optional[float]:
-        """
-        When timed mode replaces the ephemeral identity next (epoch seconds),
-        or None: not in timed mode, or ephemeral is not the one in use.
-        """
-        with self._lock:
-            if self.state["active"] != EPHEMERAL or self.state["ephemeral_mode"] != "timed":
-                return None
-            return self._ephemeral_since + self.state["ephemeral_interval"]
-
-    def keep_ephemeral(self, name: Any = None, activate: bool = True) -> Dict[str, Any]:
-        """
-        Save the current ephemeral identity as a profile and switch to it.
-        The nodes it identified to become bound to the new profile, so
-        auto-identify finds them again. activate=False (the messenger keeping
-        it while browsing as someone else) leaves the identity in use alone.
-        """
-        with self._lock:
-            kept = self._ephemeral
-            profile = self._add_profile(kept, name or "Kept identity")
-            for node in self._ephemeral_nodes:
-                self.state["bindings"].setdefault(node, profile["id"])
-            if activate:
-                self.state["active"] = profile["id"]
-                self.state["last_fixed"] = profile["id"]
-            # The kept key is a profile now; the next ephemeral is a new one.
-            self._ephemeral = RNS.Identity()
-            self._ephemeral_nodes = []
-            self._save()
-            return profile
-
-    # ------------------------------------------------------------------ #
     # Bindings and auto-identify                                         #
     # ------------------------------------------------------------------ #
 
@@ -381,11 +279,7 @@ class IdentityManager:
         node = clean_node_hash(node_hash)
         if not node:
             return None
-        if node in self.state["bindings"]:
-            return self.state["bindings"][node]
-        if node in self._ephemeral_nodes:
-            return EPHEMERAL
-        return None
+        return self.state["bindings"].get(node)
 
     def record_identify(self, node_hash: Any, profile_id: Optional[str] = None) -> None:
         """
@@ -398,10 +292,7 @@ class IdentityManager:
             return
         with self._lock:
             profile_id = profile_id or self.active_id
-            if self.binding_for(node):
-                return
-            if profile_id == EPHEMERAL:
-                self._ephemeral_nodes.append(node)
+            if self.binding_for(node) or not self._profile(profile_id):
                 return
             self.state["bindings"][node] = profile_id
             self._save()
@@ -413,38 +304,16 @@ class IdentityManager:
         with self._lock:
             if profile_id in (None, ""):
                 self.state["bindings"].pop(node, None)
-                if node in self._ephemeral_nodes:
-                    self._ephemeral_nodes.remove(node)
             else:
                 if not self._profile(profile_id):
                     raise ValueError("No such identity")
                 self.state["bindings"][node] = profile_id
-                if node in self._ephemeral_nodes:
-                    self._ephemeral_nodes.remove(node)
             self._save()
 
-    def set_options(self, auto_identify: Optional[bool] = None,
-                    ephemeral_mode: Optional[str] = None,
-                    ephemeral_interval: Any = None) -> None:
+    def set_options(self, auto_identify: Optional[bool] = None) -> None:
         with self._lock:
             if auto_identify is not None:
                 self.state["auto_identify"] = bool(auto_identify)
-            if ephemeral_interval is not None:
-                try:
-                    interval = int(ephemeral_interval)
-                except (TypeError, ValueError):
-                    interval = None
-                if interval not in EPHEMERAL_INTERVALS:
-                    raise ValueError("Unknown interval")
-                if interval != self.state["ephemeral_interval"]:
-                    self.state["ephemeral_interval"] = interval
-                    self._ephemeral_since = time.time()
-            if ephemeral_mode is not None:
-                if ephemeral_mode not in EPHEMERAL_MODES:
-                    raise ValueError("Unknown ephemeral mode")
-                if ephemeral_mode == "timed" and self.state["ephemeral_mode"] != "timed":
-                    self._ephemeral_since = time.time()
-                self.state["ephemeral_mode"] = ephemeral_mode
             self._save()
 
     def migrate_nodes(self, nodes: Any, auto_identify: Optional[bool] = None) -> int:
@@ -491,39 +360,17 @@ class IdentityManager:
                 for node, pid in sorted(self.state["bindings"].items(),
                                         key=lambda kv: node_names.get(kv[0], kv[0]).lower())
             ]
-            bindings += [
-                {"node": node, "node_name": node_names.get(node, ""),
-                 "profile_id": EPHEMERAL, "profile_name": "Ephemeral"}
-                for node in self._ephemeral_nodes
-            ]
 
             active = self.active_id
-            next_rotation = self.next_rotation()
             return {
                 "status": "success",
                 "active": active,
                 "active_name": self.name_of(active),
                 "active_identity": describe_identity(self.active_identity()),
                 "profiles": profiles,
-                "ephemeral": {
-                    **describe_identity(self._ephemeral),
-                    "used_on": [{"node": n, "node_name": node_names.get(n, "")}
-                                for n in self._ephemeral_nodes],
-                },
-                "ephemeral_mode": self.state["ephemeral_mode"],
-                "ephemeral_interval": self.state["ephemeral_interval"],
-                "ephemeral_intervals": list(EPHEMERAL_INTERVALS),
-                # Seconds, not a time of day: the phone's clock need not
-                # agree with the computer's.
-                "ephemeral_rotates_in": (None if next_rotation is None
-                                         else max(0, round(next_rotation - time.time()))),
-                "ephemeral_on": active == EPHEMERAL,
-                "last_fixed": self.state["last_fixed"],
-                "last_fixed_name": self.name_of(self.state["last_fixed"]),
                 "auto_identify": self.state["auto_identify"],
                 "bindings": bindings,
             }
 
 
-__all__ = ["IdentityManager", "EPHEMERAL", "DEFAULT_ID", "EPHEMERAL_MODES", "EPHEMERAL_INTERVALS",
-           "clean_node_hash", "describe_identity"]
+__all__ = ["IdentityManager", "DEFAULT_ID", "clean_node_hash", "describe_identity"]

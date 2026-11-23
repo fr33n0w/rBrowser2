@@ -51,14 +51,17 @@
     if (mono) root.style.setProperty('--mono-font', `"Twemoji Country Flags", ${mono}`);
 })();
 
-// Access password (Settings > System Setup): a call answered 401 means the
+// Access password (Settings > Access & Remote): a call answered 401 means the
 // session is gone (password changed, or switched on from another browser):
 // back to the login page, once.
 (function watchAuth() {
     const original = window.fetch.bind(window);
     window.fetch = async (...args) => {
         const response = await original(...args);
-        if (response.status === 401 && !window.__rbToLogin) {
+        // A guest shut out by the owner is told why first (guestCheckState).
+        if (response.status === 401 && window.rbGuest && typeof window.guestCheckState === 'function') {
+            window.guestCheckState();
+        } else if (response.status === 401 && !window.__rbToLogin) {
             const url = String(args[0] && args[0].url || args[0] || '');
             if (url.startsWith('/api/') || url.includes(location.host + '/api/')) {
                 window.__rbToLogin = true;
@@ -69,6 +72,8 @@
         // seconds; reads refused, like the messenger's polling, stay quiet,
         // and so do the preferences this browser keeps for itself).
         if (response.status === 403 && window.rbGuest) {
+            // A client closed to guests meanwhile: its polling is refused, so check now.
+            if (typeof window.guestCheckState === 'function') window.guestCheckState();
             const url = String(args[0] && args[0].url || args[0] || '');
             const method = String((args[1] && args[1].method) || (args[0] && args[0].method) || 'GET').toUpperCase();
             if (method !== 'GET' && !/\/api\/(ui-prefs|sounds)\b/.test(url)
@@ -82,7 +87,7 @@
     };
 })();
 
-// Guest mode (Settings > Guest mode): who this session is. A guest reads
+// Guest mode (Settings > Access & Remote): who this session is. A guest reads
 // the settings but cannot change them; the server refuses the rest anyway.
 window.rbGuest = null;
 (function readRole() {
@@ -90,21 +95,126 @@ window.rbGuest = null;
         // Written into the page by the server (routes.py render_index).
         const st = JSON.parse(document.getElementById('rb-auth').textContent || '{}');
         if (st.role === 'guest') window.rbGuest = st.guest || {};
+        if (st.role === 'owner' && st.asked) {
+            // Logged in with the password: a small log out, like the guest's.
+            const markOwner = () => {
+                const row = document.querySelector('.status-bar .sb-row');
+                if (!row || document.getElementById('sb-owner')) return;
+                const tag = document.createElement('span');
+                tag.id = 'sb-owner';
+                tag.className = 'sb-owner';
+                tag.innerHTML = '<a href="/logout" title="Log out of rBrowser in this browser">log out</a>';
+                row.appendChild(tag);
+            };
+            if (document.body) markOwner(); else document.addEventListener('DOMContentLoaded', markOwner);
+        }
     } catch (e) {}
     if (!window.rbGuest) return;
+    // Page closed: the owner's list hears it now, not after the timeout.
+    window.addEventListener('pagehide', () => { if (navigator.sendBeacon) navigator.sendBeacon('/api/guest/bye', ''); });
     const mark = () => {
         document.body.classList.add('guest-mode');
-        if (!window.rbGuest.messenger) document.body.classList.add('guest-no-lxmf');
+        const g = window.rbGuest;
+        if (!g.messenger) document.body.classList.add('guest-no-lxmf');
+        for (const k of ['nomadnet', 'rrc', 'bbs', 'rmap', 'radio']) if (!g[k]) document.body.classList.add('guest-no-' + k);
         const row = document.querySelector('.status-bar .sb-row');
         if (row && !document.getElementById('sb-guest')) {
             const tag = document.createElement('span');
             tag.id = 'sb-guest';
             tag.className = 'sb-guest';
-            tag.innerHTML = 'Guest · read only <a href="/logout" title="Log out, to log in again with the owner password">log in as owner</a>';
+            tag.innerHTML = 'Guest · read only '
+                + `<span class="sb-guest-online" id="sb-guest-online" title="Guests using this rBrowser now, you included">· online: ${g.online || 1}</span> `
+                + (g.log ? '<span class="sb-logged" title="The owner of this rBrowser logs what guests do">· actions logged</span> ' : '')
+                + '<a href="/logout" title="Log out, to log in again with the owner password">log out</a>'
+                + '<button type="button" class="sb-guest-theme" id="sb-guest-theme" onclick="toggleGuestTheme()"></button>';
             row.appendChild(tag);
+            // After the whole script: the theme constants are defined further down.
+            setTimeout(syncGuestThemeButton, 0);
         }
     };
     if (document.body) mark(); else document.addEventListener('DOMContentLoaded', mark);
+    // The owner closing guest access, or a client, is shown at once, not at the next timeout.
+    const CLIENT_NAMES = { nomadnet: 'NomadNet', rrc: 'RRC', bbs: 'BBS', messenger: 'LXMF Messenger', rmap: 'RMAP', radio: 'Radio' };
+    let checking = false, lastCheck = 0;
+    window.guestCheckState = async function () {
+        if (window.__rbGuestEnded || checking || Date.now() - lastCheck < 1500) return;
+        checking = true;
+        lastCheck = Date.now();
+        let st = null;
+        try {
+            const r = await fetch('/api/guest/state', { cache: 'no-store' });
+            st = await r.json();
+        } catch (e) { /* rBrowser restarting: next round */ }
+        checking = false;
+        if (!st) return;
+        const g = window.rbGuest;
+        if (st.state === 'active') {
+            const online = document.getElementById('sb-guest-online');
+            if (online && st.online) online.textContent = '· online: ' + st.online;
+            const closed = [], opened = [];
+            for (const [k, name] of Object.entries(CLIENT_NAMES)) {
+                if (g[k] && !st.rights[k]) closed.push(name);
+                if (!g[k] && st.rights[k]) opened.push(name);
+            }
+            const logged = !!st.log !== !!g.log;
+            if (!closed.length && !opened.length && !logged) return;
+            const parts = [];
+            if (closed.length) parts.push(closed.join(', ') + ' closed');
+            if (opened.length) parts.push(opened.join(', ') + ' opened');
+            if (logged) parts.push(st.log ? 'guest actions are now logged' : 'guest actions no longer logged');
+            guestEnded('The owner changed guest access: ' + parts.join(', ') + '.', 'reload');
+        } else if (['closed', 'changed', 'kicked', 'banned', 'lost'].includes(st.state)) {
+            guestEnded(st.state === 'closed' ? 'The owner closed guest access.'
+                       : st.state === 'kicked' ? 'The owner closed your guest session.'
+                       : st.state === 'banned' ? 'The owner banned you from guest access.'
+                       : st.state === 'lost' ? 'Your guest session ended while rBrowser was offline: log in again.'
+                       : 'The owner changed guest access: log in again.', st.state);
+        } else {
+            location.href = '/login';
+        }
+    };
+    function guestEnded(text, then) {
+        window.__rbGuestEnded = true;
+        document.body.classList.add('guest-ended');
+        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+        document.querySelectorAll('textarea, input, select').forEach(el => { el.disabled = true; });
+        const reload = then === 'reload';
+        const bar = document.createElement('div');
+        bar.id = 'guest-ended-bar';
+        bar.setAttribute('role', 'alert');
+        bar.innerHTML = `<span>${escapeHtml(text)}</span> <span class="guest-ended-wait"></span>`
+            + `<button type="button">${reload ? 'Reload now' : 'Log in again'}</button>`;
+        document.body.appendChild(bar);
+        if (typeof showNotification === 'function') showNotification(escapeHtml(text), 'error', 8000);
+        const go = () => {
+            if (reload) location.reload();
+            else location.href = '/login?ended=' + then + '&next=' + encodeURIComponent(location.pathname + location.search);
+        };
+        bar.querySelector('button').onclick = go;
+        let left = reload ? 5 : 10;
+        const wait = bar.querySelector('.guest-ended-wait');
+        const tick = () => {
+            wait.textContent = (reload ? 'Reloading in ' : 'Back to the login in ') + left + ' s';
+            if (left-- <= 0) go(); else setTimeout(tick, 1000);
+        };
+        tick();
+    }
+    // Worker timer: hidden tabs throttle setInterval to once a minute, a worker's keeps 5 s.
+    try {
+        const tick = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 5000);'], { type: 'text/javascript' })));
+        tick.onmessage = () => window.guestCheckState();
+    } catch (e) { setInterval(() => window.guestCheckState(), 5000); }
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) window.guestCheckState(); });
+    // Without NomadNet a guest starts on the first client open to them.
+    if (!window.rbGuest.nomadnet) {
+        const start = Date.now();
+        const pick = setInterval(() => {
+            const tab = [...document.querySelectorAll('#messenger-tab, #rrc-tab, #retibbs-tab, #rmap-tab')]
+                .find(t => t.offsetParent !== null);
+            if (tab || Date.now() - start > 15000) clearInterval(pick);
+            if (tab && !tab.classList.contains('active')) tab.click();
+        }, 500);
+    }
 })();
 
 // The page's preferences live on the server, in settings/ui_prefs.json, not
@@ -115,7 +225,7 @@ window.rbGuest = null;
 // one of these keys is written to the file at once. Kept local: what
 // belongs to this screen (sidebar width, page zoom, open windows).
 (function syncPrefsWithServer() {
-    const LOCAL_ONLY = /^rbrowser_(app_alive_|page_zoom_factor$|sidebar_width$|sidebar_collapsed$|list_collapsed_|settings_category$)/;
+    const LOCAL_ONLY = /^rbrowser_(app_alive_|page_zoom_factor$|sidebar_width$|sidebar_collapsed$|list_collapsed_|settings_category$|guest_theme$)/;
     const synced = key => typeof key === 'string' && key.startsWith('rbrowser_') && !LOCAL_ONLY.test(key);
     let store;
     try { store = window.localStorage; } catch (e) { return; }
@@ -144,6 +254,8 @@ window.rbGuest = null;
         if (Object.keys(mine).length) queue(mine);
     }
     function queue(changes) {
+        // A guest's layout stays in the guest's browser: the owner's file is not the guest's to change.
+        if (window.rbGuest) return;
         Object.assign(pending, changes);
         clearTimeout(timer);
         timer = setTimeout(() => {
@@ -723,7 +835,8 @@ function switchToTab(tabId) {
     // Fit is per page, and the hint belongs to the area now on screen.
     setTimeout(() => {
         const tab = getActiveTab();
-        if (tab) { refitPageZoom(); initScrollHint(tab); updateScrollHint(tab); }
+        if (tab) { redrawPageTab(tab); refitPageZoom(); initScrollHint(tab); updateScrollHint(tab); }
+        reportNomadTabs();
     }, 0);
 
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -817,29 +930,59 @@ function closeTab(tabId, event) {
         stopPartials(tab.id);
     }
     
+    const closedNode = tabNodeHash(tab);
     tabs.splice(tabIndex, 1);
-    
+
     document.querySelector(`[data-tab-id="${tabId}"]`)?.remove();
     document.getElementById(tabId)?.remove();
 
     if (wasLast) {
         createNewTab();
-        return;
-    }
-
-    if (activeTabId === tabId) {
+    } else if (activeTabId === tabId) {
         const nextTab = tabs[Math.max(0, tabIndex - 1)];
         switchToTab(nextTab.id);
     }
+    if (closedNode) reportNomadTabs([closedNode]);
 }
 
 function getActiveTab() {
     return tabs.find(t => t.id === activeTabId);
 }
 
+// The server closes the links of nodes no tab shows, or not looked at for 60 s (linkwatch.py).
+const TABS_CLIENT = Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+function tabNodeHash(tab) {
+    const p = tab && tab.currentUrl ? parseNomadNetUrl(tab.currentUrl) : null;
+    return p && p.hash ? p.hash.slice(0, 32) : '';
+}
+
+function reportNomadTabs(closed, gone) {
+    const appOpen = (typeof Messenger !== 'undefined' && Messenger.open)
+        || (typeof Rrc !== 'undefined' && Rrc.open)
+        || (typeof RetiBBS !== 'undefined' && RetiBBS.open)
+        || (typeof Rmap !== 'undefined' && Rmap.open);
+    const open = new Set(), watched = new Set();
+    for (const t of tabs) {
+        const h = tabNodeHash(t);
+        if (!h) continue;
+        open.add(h);
+        if (t.id === activeTabId && !document.hidden && !appOpen) watched.add(h);
+    }
+    const body = JSON.stringify({ client: TABS_CLIENT, open: [...open], watched: [...watched],
+                                  closed: (closed || []).filter(h => !open.has(h)), gone: !!gone });
+    if (gone && navigator.sendBeacon) { navigator.sendBeacon('/api/nomadnet/tabs', body); return; }
+    fetch('/api/nomadnet/tabs', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                  body, keepalive: true }).catch(() => {});
+}
+setInterval(() => reportNomadTabs(), 15000);
+document.addEventListener('visibilitychange', () => reportNomadTabs());
+window.addEventListener('pagehide', () => reportNomadTabs([], true));
+
 // Favorites system //
 
 function addCurrentPageToFavorites() {
+    if (guestNoFavorites()) return;
     const tab = getActiveTab();
     if (!tab || !tab.currentUrl) {
         showNotification('No current page to add to favorites', 'warning', 4000);
@@ -880,6 +1023,13 @@ function addCurrentPageToFavorites() {
     showNotification(`Added "${escapeHtml(name)}" to favorites!`, 'success', 4000);
 }
 
+// Guests see the owner's favorites but cannot change them.
+function guestNoFavorites() {
+    if (!window.rbGuest) return false;
+    showNotification('Guest mode: favorites are read only', 'warning', 3000);
+    return true;
+}
+
 function isFavorite(hash) {
     return favoriteNodes.some(fav => fav.hash === hash);
 }
@@ -913,7 +1063,7 @@ function syncFavorites() {
         const favorited = isFavorite(btn.getAttribute('data-hash'));
         const icon = favorited ? '★' : '☆';
         if (btn.textContent !== icon) btn.textContent = icon;
-        btn.style.color = favorited ? '#ffa657' : '#7d8590';
+        btn.style.color = favorited ? 'var(--c-ffa657)' : 'var(--c-7d8590)';
     });
 }
 
@@ -923,6 +1073,7 @@ function updateStarButtonState() {
 }
 
 function showAddFavoriteDialog() {
+    if (guestNoFavorites()) return;
     showFavoriteDialog();
 }
 
@@ -949,6 +1100,7 @@ function closeFavoriteDialog() {
 //
 // With a hash already known (the current page), only the name is asked.
 function showFavoriteDialog(options = {}) {
+    if (guestNoFavorites()) return;
     closeFavoriteDialog();
     if (typeof setFavoritesOpen === 'function') setFavoritesOpen(false);
 
@@ -1162,6 +1314,7 @@ function showFavoriteDialog(options = {}) {
 }
 
 function addFavoriteFromUrl() {
+    if (guestNoFavorites()) return;
     const tab = getActiveTab();
     if (!tab || !tab.currentUrl) {
         showNotification(
@@ -1262,6 +1415,8 @@ async function navigateToUrlInternalTab(url, addHistory = true, forceFresh = fal
     if (!backgroundReload && (document.body.classList.contains('messenger-open')
                               || document.body.classList.contains('retibbs-open')
                               || document.body.classList.contains('rmap-open')
+                              || document.body.classList.contains('monitor-open')
+                              || document.body.classList.contains('radio-open')
                               || document.body.classList.contains('rrc-open'))) {
         switchToTab(tab.id);
     }
@@ -1645,7 +1800,7 @@ function showConfirmDialog(message, onConfirm, onCancel = null) {
     
     const dialog = document.createElement('div');
     dialog.style.cssText = `
-        background: #161b22; border: 2px solid #30363d; color: #e6edf3;
+        background: var(--c-161b22); border: 2px solid var(--c-30363d); color: var(--c-e6edf3);
         padding: 20px; border-radius: 8px; max-width: 400px; min-width: 300px;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         box-shadow: 0 8px 24px rgba(0,0,0,0.5);
@@ -1655,11 +1810,11 @@ function showConfirmDialog(message, onConfirm, onCancel = null) {
         <div style="margin-bottom: 16px; line-height: 1.5; font-size: 14px;">${message}</div>
         <div style="display: flex; gap: 8px; justify-content: flex-end;">
             <button id="cancel-btn" style="
-                background: #6e7681; color: white; border: none; 
+                background: var(--c-6e7681); color: white; border: none; 
                 padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 13px;
             ">Cancel</button>
             <button id="confirm-btn" style="
-                background: #238636; color: white; border: none; 
+                background: var(--c-238636); color: white; border: none; 
                 padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 13px;
             ">Open</button>
         </div>
@@ -1901,6 +2056,7 @@ function hydrateMicronPartials(root, pageHash, tab) {
                 if (data.status === 'success') {
                     const rendered = parseMicronContent(data.content);
                     holder.innerHTML = rendered;
+                    addClickHandlersToCurrentTab(tab, holder);   // its links work as the page's
                     // New lines in the page: sort them into prose and layout
                     // and fit again (the chat in a refreshing partial is
                     // mostly long prose lines).
@@ -1971,11 +2127,13 @@ document.addEventListener('keydown', e => {
     link.click();
 }, true);   // capture: first, so nothing on the page can swallow the key
 
-function addClickHandlersToCurrentTab(targetTab = null) {
+function addClickHandlersToCurrentTab(targetTab = null, root = null) {
     const tab = targetTab || getActiveTab();
     if (!tab) return;
-    
-    const links = document.querySelectorAll(`#${tab.id} .page-content a`);
+
+    // root: only the links in there (a partial that just loaded)
+    const links = root ? root.querySelectorAll('a')
+        : document.querySelectorAll(`#${tab.id} .page-content a`);
     
     function handleClick(event) {
         event.preventDefault();
@@ -2194,7 +2352,8 @@ function pageLinkInfo(link, tab) {
 function showPageLinkMenu(link, tab) {
     const info = pageLinkInfo(link, tab);
     const nodeName = hash => ((cachedNodes || []).find(n => n.hash === hash) || {}).name || '';
-    const copy = (text, what) => ({ label: `Copy ${what}`, run: () => copyText(text, `${what[0].toUpperCase() + what.slice(1)} copied:<br><code>${escapeHtml(text)}</code>`) });
+    const copy = (text, what) => ({ label: `Copy ${what}`, tip: `Copy the ${what} to the clipboard`,
+        run: () => copyText(text, `${what[0].toUpperCase() + what.slice(1)} copied:<br><code>${escapeHtml(text)}</code>`) });
     const copyLabel = info.label && info.label !== info.address ? [copy(info.label, 'link text')] : [];
     const title = info.label || info.address || 'Link';
     // The address's own hash, to check what it really is.
@@ -2206,31 +2365,32 @@ function showPageLinkMenu(link, tab) {
         const isFavorite = favoriteNodes.some(f => f.hash === info.hash);
         const inList = (cachedNodes || []).some(n => n.hash === info.hash);
         openNodeMenu(link, title, info.address, [
-            { label: 'Open link', run: () => link.click() },
+            { label: 'Open link', run: () => link.click(), tip: 'Open this link in this tab' },
             { label: 'Open in a new tab', run: () => openQuickAddress(info.address, name, true),
-              tip: 'A new rBrowser tab; this page stays' },
+              tip: 'Open this link in a new tab' },
             { label: 'Open in a new tab in background', run: () => openInBackgroundTab(info.address, name),
-              tip: 'Loads in a new tab while you keep reading this page' },
+              tip: 'Open this link in a new tab, without leaving this one' },
             { label: 'Open in a new window', run: () => window.open(`${location.origin}/?url=${encodeURIComponent(info.address)}`, '_blank'),
-              tip: 'rBrowser in a new browser window' },
+              tip: 'Open this link in a new browser window' },
             '-',
             { label: isFavorite ? 'Remove node from favorites' : 'Add node to favorites',
-              run: () => toggleFavorite(info.hash, name || info.label) },
+              run: () => toggleFavorite(info.hash, name || info.label),
+              tip: isFavorite ? 'Remove this node from your favorites' : 'Add this node to your favorites' },
             copy(info.address, 'address'),
             ...copyLabel,
             '-',
             { label: 'Node info', disabled: !inList, run: () => showNodeMenuInfo(info.hash),
-              tip: inList ? 'The node as heard in the list' : 'Not in the node list: it has not announced' },
-            { label: 'Ping node', run: () => pingNode(info.hash, name) },
+              tip: inList ? 'Show the details of this node' : 'Not in the node list yet' },
+            { label: 'Ping node', run: () => pingNode(info.hash, name), tip: 'Check if this node answers' },
             { label: 'Check path', run: () => checkPath(info.hash, name),
-              tip: 'The path held to this node now. Nothing is sent' },
+              tip: 'Show the path to this node, nothing is sent' },
             aspectCheckItem(link, info.hash, 'nomadnetwork.node'),
         ]);
         return true;
     }
     case 'file':
         openNodeMenu(link, title, info.address, [
-            { label: 'Download', run: () => link.click() },
+            { label: 'Download', run: () => link.click(), tip: 'Download this file' },
             copy(info.address, 'address'),
             ...copyLabel,
             ...check,
@@ -2238,7 +2398,7 @@ function showPageLinkMenu(link, tab) {
         return true;
     case 'form':
         openNodeMenu(link, title, info.address, [
-            { label: 'Send', run: () => link.click(), tip: 'Sends the fields this link names, as a click does' },
+            { label: 'Send', run: () => link.click(), tip: 'Send the form fields, as a click does' },
             copy(info.address, 'address'),
             ...copyLabel,
             ...check,
@@ -2261,7 +2421,7 @@ function showPageLinkMenu(link, tab) {
     case 'app':
         openNodeMenu(link, title, info.address, [
             { label: `"${info.proto}" address`, disabled: true, run: () => {},
-              tip: 'For another Reticulum application, not a NomadNet page' },
+              tip: 'An address for another Reticulum app, not a page' },
             copy(info.address, 'address'),
             ...copyLabel,
             ...check,
@@ -2274,9 +2434,9 @@ function showPageLinkMenu(link, tab) {
             .map(([k, v]) => `${k}: ${v}`).join(', ');
         openNodeMenu(link, info.params.name || title, info.address, [
             { label: `A link for the "${info.scheme}" app`, disabled: true, run: () => {},
-              tip: `Not a NomadNet link: made for ${info.scheme}${said ? ` (${said})` : ''}` },
+              tip: `A link for ${info.scheme}, not a NomadNet page${said ? ` (${said})` : ''}` },
             { label: `Open with ${info.scheme}`, run: () => { window.location.href = info.address; },
-              tip: `Hands the link to ${info.scheme}, if it is installed on this computer` },
+              tip: `Open this link with ${info.scheme}, if installed` },
             ...info.hashes.map(h => {
                 const role = Object.keys(info.params).find(k => String(info.params[k]).toLowerCase() === h);
                 return { ...aspectCheckItem(link, h, null),
@@ -2292,14 +2452,14 @@ function showPageLinkMenu(link, tab) {
     case 'email':
         openNodeMenu(link, title, info.address, [
             { label: 'Write an e-mail', run: () => { window.location.href = `mailto:${info.address}`; },
-              tip: 'Opens your mail program: this is internet mail, not Reticulum' },
+              tip: 'Write to this address with your mail program' },
             copy(info.address, 'e-mail address'),
         ]);
         return true;
     case 'invalid':
         openNodeMenu(link, title, info.address, [
             { label: 'Not a valid address', disabled: true, run: () => {},
-              tip: 'The page links to something rBrowser cannot read: a hash of the wrong length, a typo...' },
+              tip: 'This link is written wrong and cannot be opened' },
             copy(info.address, 'link as written'),
             ...copyLabel,
         ]);
@@ -2307,7 +2467,7 @@ function showPageLinkMenu(link, tab) {
     case 'web':
         openNodeMenu(link, title, info.address, [
             { label: 'Open in the web browser', run: () => window.open(info.address, '_blank', 'noopener,noreferrer'),
-              tip: 'Leaves Reticulum: this goes over the internet' },
+              tip: 'Open this web page in the browser, over the internet' },
             copy(info.address, 'URL'),
             ...copyLabel,
         ]);
@@ -2388,8 +2548,9 @@ function urlAtPoint(event) {
 function showTextUrlMenu(anchor, url) {
     openNodeMenu(anchor, 'Web address', url, [
         { label: 'Open in a new browser window', run: () => window.open(url, '_blank', 'noopener,noreferrer'),
-          tip: 'Leaves Reticulum: this goes over the internet' },
-        { label: 'Copy URL', run: () => copyText(url, `URL copied:<br><code>${escapeHtml(url)}</code>`) },
+          tip: 'Open this web page in a new window, over the internet' },
+        { label: 'Copy URL', run: () => copyText(url, `URL copied:<br><code>${escapeHtml(url)}</code>`),
+          tip: 'Copy this web address' },
     ]);
 }
 
@@ -2436,17 +2597,18 @@ async function showTextAddressMenu(anchor, hash, kind = null) {
     const asNode = [
         { label: 'Open as NomadNet page', run: () => openQuickAddress(`${hash}:/page/index.mu`, name, true),
           disabled: isNot('nomadnetwork.node'),
-          tip: isNot('nomadnetwork.node') ? `It is ${kind.label}: it has no pages` : 'Opens its index.mu in a new tab' },
+          tip: isNot('nomadnetwork.node') ? `It is ${kind.label}: it has no pages` : 'Open this node in a new tab' },
     ];
     const asLxmf = [
         { label: messenger ? 'Write with the messenger' : 'Write with the messenger (turn it on in Settings)',
           disabled: !messenger || isNot('lxmf.delivery'), run: () => openMessenger(hash),
-          tip: isNot('lxmf.delivery') ? `It is ${kind.label}, not an LXMF address` : 'As an LXMF address' },
+          tip: isNot('lxmf.delivery') ? `It is ${kind.label}, not an LXMF address`
+              : messenger ? 'Write a message to this address' : 'Turn on the messenger in Settings > LXMF Messenger' },
     ];
     const asRrc = [{ ...rrcMenuItem(hash), ...(isNot('rrc.hub') ? { disabled: true, tip: `It is ${kind.label}, not an RRC hub` } : {}) }];
     const asPropagation = [
         { label: 'Use as propagation node', run: () => usePropagationNode(hash),
-          tip: 'Settings > LXMF Messenger > Propagation node: this one, chosen' },
+          tip: 'Use this node as your LXMF propagation node' },
     ];
     // The likely way first; the others stay, for when it was not heard.
     const ways = aspect === 'lxmf.delivery' ? [...asLxmf, ...asNode, ...asRrc]
@@ -2454,13 +2616,14 @@ async function showTextAddressMenu(anchor, hash, kind = null) {
                : aspect === 'lxmf.propagation' ? [...asPropagation, ...asNode, ...asLxmf]
                : [...asNode, ...asLxmf, ...asRrc];
     openNodeMenu(anchor, name || what, hash, [
-        ...(name ? [{ label: what, disabled: true, run: () => {} }] : []),
+        ...(name ? [{ label: what, disabled: true, run: () => {}, tip: 'What this address is' }] : []),
         aspectCheckItem(anchor, hash, null),
         ...ways,
         '-',
-        { label: 'Copy address', run: () => copyText(hash, `Address copied:<br><code>${hash}</code>`) },
+        { label: 'Copy address', run: () => copyText(hash, `Address copied:<br><code>${hash}</code>`),
+          tip: 'Copy this address' },
         { label: 'Check path', run: () => checkPath(hash, name),
-          tip: 'The path held to this address now. Nothing is sent' },
+          tip: 'Show the path to this address, nothing is sent' },
     ]);
 }
 
@@ -2472,7 +2635,7 @@ const DECLARED_ASPECT = { nomadnet: 'nomadnetwork.node', file: 'nomadnetwork.nod
 
 function aspectCheckItem(anchor, hash, declared) {
     return { label: 'Check address aspect type', run: () => checkAddressAspect(anchor, hash, declared),
-             tip: 'Find out what this address really is, from its own identity. Asks the network once (a path request) only if it was never heard' };
+             tip: 'Find out what this address really is (node, LXMF, RRC...)' };
 }
 
 // One path request; the answer brings the announce, so the identity, so
@@ -2574,7 +2737,7 @@ function rrcMenuItem(address) {
     const on = typeof rrcEnabled === 'function' && rrcEnabled();
     return { label: on ? 'Open in RRC chat' : 'Open in RRC chat (turn it on in Settings)', disabled: !on,
              run: () => openLinkTarget({ kind: 'rrc', address: rrcLinkOf(address) }),
-             tip: 'Connects to the hub in rBrowser\'s RRC client' };
+             tip: on ? 'Connect to this hub in the RRC chat' : 'Turn on the RRC client in Settings' };
 }
 
 // "rrc@<hash>", a bare hash or rrc://<hash>/room: the rrc:// form.
@@ -2991,7 +3154,7 @@ async function takePageScreenshot(tab, content) {
                 }
                 // Browser furniture, not page: the hover box, the "more
                 // below" arrow.
-                doc.querySelectorAll('#source-tip, .scroll-hint').forEach(el => el.remove());
+                doc.querySelectorAll('#rb-tip, .scroll-hint').forEach(el => el.remove());
             }
         });
 
@@ -3128,7 +3291,7 @@ function askText(title, html, value = '', okLabel = 'OK') {
 // The bar, always in this order: page tabs, "+", Messages, RRC,
 // BBS, RMAP, Settings. Each app tab is put in its place when created; "+",
 // the apps and Settings are kept in view at the right edge, side by side.
-const APP_TAB_ORDER = ['messenger-tab', 'rrc-tab', 'retibbs-tab', 'rmap-tab'];
+const APP_TAB_ORDER = ['messenger-tab', 'rrc-tab', 'retibbs-tab', 'rmap-tab', 'radio-tab', 'monitor-tab'];   // MON always last
 
 // The state of an app at a glance, a dot on its tab, the same colours as the
 // hub and server lists: 'connected' green, 'connecting' yellow, 'failed' red,
@@ -3267,9 +3430,7 @@ function shortAddr(hex) {
 
 function identityLabel(state = identityState) {
     if (!state) return 'your identity';
-    return state.active === 'ephemeral'
-        ? `Ephemeral ${shortAddr(state.active_identity.lxmf_address)}`
-        : state.active_name;
+    return state.active_name;
 }
 
 function applyIdentityState(state) {
@@ -3282,7 +3443,6 @@ function applyIdentityState(state) {
     }
     updateAutoIdentifyButton();
     if (document.getElementById('identity-body')) renderIdentitySettings();
-    scheduleEphemeralCheck();
     return state;
 }
 
@@ -3317,14 +3477,10 @@ function bindingFor(hash) {
 
 function updateIdentityChip() {
     const label = identityLabel();
-    const ephemeral = identityState && identityState.active === 'ephemeral';
     document.querySelectorAll('.identity-chip').forEach(chip => {
         const name = chip.querySelector('.identity-chip-name');
-        // Just "Ephemeral" on the button - the colour says it is a throwaway
-        // identity; the address with it made the button too wide. The
-        // address and identity hash are in the tooltip.
-        if (name) name.textContent = identityState ? (ephemeral ? 'Ephemeral' : label) : '…';
-        chip.classList.toggle('ephemeral', !!ephemeral);
+        // The address and identity hash are in the tooltip.
+        if (name) name.textContent = identityState ? label : '…';
         chip.title = identityState
             ? `Identity in use: ${label}\nLXMF ${identityState.active_identity.lxmf_address}\n`
               + `Identity hash ${identityState.active_identity.identity_hash}\n`
@@ -3342,10 +3498,10 @@ function toggleBrowserIdentityMenu(chip, force) {
     if (!open || !chip) return;
     const s = identityState;
     if (!s) { loadIdentityState().then(() => toggleBrowserIdentityMenu(chip, true)); return; }
-    const current = s.ephemeral_on ? 'ephemeral' : s.active;
+    const current = s.active;
     const avatar = (addr, name) => typeof avatarHtml === 'function' ? avatarHtml(addr, name, 'small', false) : '';
     const item = (id, name, addr, extra = '') => `
-        <button class="msg-menu-item${id === current ? ' current' : ''}${id === 'ephemeral' ? ' ephemeral' : ''}" data-id="${escapeHtml(id)}">
+        <button class="msg-menu-item${id === current ? ' current' : ''}" data-id="${escapeHtml(id)}">
             ${avatar(addr, name)}
             <span class="msg-menu-text"><b>${escapeHtml(name)}</b>${extra}<code>${escapeHtml(addr || '')}</code></span>
             ${id === current ? '<span class="msg-menu-check">✓</span>' : ''}
@@ -3355,10 +3511,7 @@ function toggleBrowserIdentityMenu(chip, force) {
     menu.className = 'msg-identity-menu identity-chip-menu';
     menu.innerHTML = '<div class="msg-menu-head">Browse as</div>'
         + s.profiles.filter(p => p.loadable).map(p => item(p.id, p.name, p.lxmf_address)).join('')
-        + item('ephemeral', 'Ephemeral', s.ephemeral ? s.ephemeral.lxmf_address : '',
-               '<span class="msg-menu-nick">a throwaway identity, renewed</span>')
         + '<div class="msg-menu-sep"></div>'
-        + (s.ephemeral_on ? '<button class="msg-menu-item plain" data-act="rotate">New ephemeral identity now</button>' : '')
         + '<button class="msg-menu-item plain" data-act="copy">Copy my identity hash</button>'
         + '<button class="msg-menu-item plain" data-act="settings">Identity settings…</button>';
     document.body.appendChild(menu);
@@ -3375,14 +3528,8 @@ function toggleBrowserIdentityMenu(chip, force) {
         const act = btn.dataset.act;
         if (act === 'copy') return copyText(s.active_identity.identity_hash, 'Identity hash copied');
         if (act === 'settings') return showSettings('identity');
-        if (act === 'rotate') return rotateEphemeral();
         const id = btn.dataset.id;
         if (!id || id === current) return;
-        if (id === 'ephemeral') return toggleEphemeral(true);
-        if (s.ephemeral_on) {
-            await toggleEphemeral(false);
-            if (identityState && identityState.active === id) return;
-        }
         await useIdentity(id);
     });
 }
@@ -3673,69 +3820,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     await migrateLegacyAutoIdentify();
 });
 
-// ─────────────────────────────────────────────────────────────
-// Reload, as pressed by the user
-//
-// With the ephemeral identity set to "new at every reload", this is where
-// it is replaced: the reload button and Alt+B only. Following links keeps
-// it, so a node you identified to does not log you out on every click, and
-// the reload a successful identify triggers goes through refreshPageTab()
-// directly and keeps it too.
-// ─────────────────────────────────────────────────────────────
-
-async function confirmDropEphemeral(actionLabel) {
-    const used = (identityState && identityState.ephemeral.used_on) || [];
-    if (!used.length) return 'replace';
-    const names = used.map(u => escapeHtml(u.node_name || u.node.slice(0, 16))).join(', ');
-    return showChoiceDialog({
-        title: 'Replace the ephemeral identity?',
-        html: `The current ephemeral identity identified to <strong>${names}</strong>.
-               Once it is replaced, those accounts can never be reached again.<br><br>
-               Keep it as a saved identity to be able to come back to them.`,
-        buttons: [{ label: 'Cancel', value: null },
-                  { label: actionLabel, value: 'replace', danger: true },
-                  { label: 'Keep it first', value: 'keep', primary: true }]
-    });
-}
-
-async function keepEphemeral() {
-    const name = await askText('Keep the ephemeral identity',
-        'It becomes a saved identity, stays in use, and the nodes it identified to '
-        + 'remember it for auto-identify.', 'Kept identity', 'Keep');
-    if (name === null) return false;
-    try {
-        const state = await identityRequest('/api/identities/ephemeral/keep', { name });
-        showNotification(`Saved as <strong>${escapeHtml(state.active_name)}</strong>, now in use`, 'success', 4000);
-        return true;
-    } catch (e) {
-        showNotification(`Could not keep the identity: ${escapeHtml(e.message)}`, 'error', 5000);
-        return false;
-    }
-}
-
-async function rotateEphemeral(actionLabel = 'Replace it') {
-    const choice = await confirmDropEphemeral(actionLabel);
-    if (!choice) return false;
-    if (choice === 'keep') return (await keepEphemeral()) ? 'kept' : false;
-    try {
-        const state = await identityRequest('/api/identities/ephemeral/rotate');
-        if (state.active === 'ephemeral') {
-            showNotification(`New ephemeral identity ${escapeHtml(shortAddr(state.active_identity.lxmf_address))}`,
-                             'info', 2500);
-        }
-        return 'rotated';
-    } catch (e) {
-        showNotification(`Could not replace the ephemeral identity: ${escapeHtml(e.message)}`, 'error', 5000);
-        return false;
-    }
-}
-
+// Reload, as pressed by the user (reload button, Alt+B).
 async function userReloadPageTab() {
-    const s = identityState;
-    if (s && s.active === 'ephemeral' && s.ephemeral_mode === 'reload') {
-        const outcome = await rotateEphemeral('Replace and reload');
-        if (!outcome) return;
-    }
     refreshPageTab();
 }
 
@@ -3851,7 +3937,7 @@ function setPageSource(tab, response) {
             + '\nClick to try the node again.';
     } else {
         pill.hidden = true;
-        hideSourceTip();
+        window.rbHideTip?.();
         return;
     }
     pill.hidden = false;
@@ -3906,41 +3992,8 @@ function formatDuration(seconds) {
     return Math.round(seconds / 86400) + ' d';
 }
 
-// The pill's explanation, in a themed box right under it. The native
-// title tooltip came late, small, and not at all on a disabled button.
-function showSourceTip(pill) {
-    const text = pill.matches('.node-dot, .node-cache') ? nodeDotTip(pill) : pill.dataset.tip;
-    if (!text || pill.hidden) return;
-    let tip = document.getElementById('source-tip');
-    if (!tip) {
-        tip = document.createElement('div');
-        tip.id = 'source-tip';
-        tip.className = 'source-tip';
-        document.body.appendChild(tip);
-    }
-    tip.textContent = text;
-    const r = pill.getBoundingClientRect();
-    tip.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 420)) + 'px';
-    tip.classList.add('open');
-    // Above the element when there is no room below (cards low in the list).
-    const below = r.bottom + 6;
-    tip.style.top = (below + tip.offsetHeight > window.innerHeight - 8
-        ? Math.max(8, r.top - tip.offsetHeight - 6) : below) + 'px';
-}
-
-function hideSourceTip() {
-    const tip = document.getElementById('source-tip');
-    if (tip) tip.classList.remove('open');
-}
-
-document.addEventListener('mouseover', e => {
-    const pill = e.target.closest && e.target.closest('.source-pill, .node-dot, .node-cache, .node-visits, .node-hops');
-    if (pill) showSourceTip(pill);
-});
-document.addEventListener('mouseout', e => {
-    const pill = e.target.closest && e.target.closest('.source-pill, .node-dot, .node-cache, .node-visits, .node-hops');
-    if (pill && !pill.contains(e.relatedTarget)) hideSourceTip();
-});
+// Node list: the dot and the disk say it at hover time (tooltips.js).
+window.rbTipText = el => el.matches('.node-dot, .node-cache') ? nodeDotTip(el) : null;
 
 // Saved pages per node, for the dots in the node list: a ring on the dot
 // when the node has pages, amber when a visit would open them from the
@@ -4039,7 +4092,7 @@ function nodeDotTip(el) {
 }
 
 function sourcePillClick(pill) {
-    hideSourceTip();
+    window.rbHideTip?.();
     if (pill.classList.contains('is-cache') || pill.classList.contains('is-offline')) {
         refreshPage();
     }
@@ -4071,6 +4124,24 @@ function reportPageLoad(content, startedAt, source, nodeName, path) {
         (which ? `<strong>${which}</strong><br>` : '')
         + `Loaded in ${elapsed} - ${size}${where}`,
         'success', 3500);
+}
+
+// NomadNet 1.5.1 nodes ask a link stamp before the first page: the page header says so while it runs.
+function showLinkStampNote(tab, hash, controller, pageDetails, pageContent) {
+    fetch(`/api/link-stamp/${hash}`)
+        .then(r => r.json())
+        .then(s => {
+            if (!s || !s.needs || tab.currentRequest !== controller) return;
+            const cost = Number(s.cost).toFixed(1);
+            if (pageDetails) {
+                pageDetails.insertAdjacentHTML('beforeend',
+                    ` <span class="label">Link stamp:</span> <span class="value">calculating cost ${cost}</span>`);
+            }
+            const box = pageContent && pageContent.querySelector('.page-loading');
+            if (box) box.insertAdjacentHTML('beforeend',
+                `<br><br>Link stamp: calculating cost ${cost}...`);
+        })
+        .catch(() => {});
 }
 
 function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTab = null) {
@@ -4130,6 +4201,7 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
                    + (forceFresh ? '&fresh=1' : '')
                    + (tab.skipVisitCount ? '&visit=0' : '');
     tab.skipVisitCount = false;
+    showLinkStampNote(tab, hash, controller, pageDetails, pageContent);
 
     fetch(fetchUrl, { signal: controller.signal })
         .then(r => r.json())
@@ -4293,9 +4365,10 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
                     // aligned on its own, and selection is the native one.
                     const touchDevice = window.matchMedia('(pointer: coarse)').matches
                         || (typeof isMobileDevice === 'function' && isMobileDevice());
-                    micronParser = new window.MicronParser(true, !touchDevice);
+                    const dark = shownTheme() !== 'light';
+                    micronParser = new window.MicronParser(dark, !touchDevice);
                     // For long pages on a desktop (Light rendering): no cells.
-                    micronParserLight = touchDevice ? micronParser : new window.MicronParser(true, false);
+                    micronParserLight = touchDevice ? micronParser : new window.MicronParser(dark, false);
                     isOriginalParser = true;
                 } else {
                     throw new Error('MicronParser not available');
@@ -4656,7 +4729,7 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
         function buildNodeItem(node) {
             const isFavorite = favoriteNodes.some(fav => fav.hash === node.hash);
             const starIcon = isFavorite ? '★' : '☆';
-            const starColor = isFavorite ? '#ffa657' : '#7d8590';
+            const starColor = isFavorite ? 'var(--c-ffa657)' : 'var(--c-7d8590)';
 
             const item = document.createElement('div');
             item.className = 'node-item';
@@ -4860,7 +4933,7 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
                 const icon = isFavorite ? '★' : '☆';
                 if (starBtn.textContent !== icon) {
                     starBtn.textContent = icon;
-                    starBtn.style.color = isFavorite ? '#ffa657' : '#7d8590';
+                    starBtn.style.color = isFavorite ? 'var(--c-ffa657)' : 'var(--c-7d8590)';
                 }
                 starBtn.setAttribute('data-name', node.name || '');
             }
@@ -4913,7 +4986,7 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
 
                     if (nodes.length === 0) {
                         if (!list.querySelector('.node-list-empty')) {
-                            list.innerHTML = '<div class="node-list-empty" style="text-align: center; padding: 20px; color: #7d8590; font-size: 12px;">Scanning for NomadNet Nodes...</div>';
+                            list.innerHTML = '<div class="node-list-empty" style="text-align: center; padding: 20px; color: var(--c-7d8590); font-size: 12px;">Scanning for NomadNet Nodes...</div>';
                         }
                         return;
                     }
@@ -5057,6 +5130,12 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
                 })
                 .then(data => {
                     document.getElementById('announce-count').textContent = data.total_announces;
+                    const guests = document.getElementById('sb-guests');
+                    if (guests) {
+                        guests.hidden = data.guests == null;
+                        guests.classList.toggle('sb-guests-in', data.guests > 0);
+                        document.getElementById('guests-count').textContent = data.guests ?? 0;
+                    }
                     renderHeardStats(data.heard);
                     checkFavoritesRevision(data.favorites_revision);
                     openDeliveredLinks(data.open_links);
@@ -5076,8 +5155,11 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
                     statusFetchFailures = 0;
                     lastStatusFetch = Date.now();
 
-                    if (wasInErrorState) {
+                    if (serverDownShown) {
+                        document.querySelector('.server-down-bar')?.remove();
+                        showServerBack();
                     }
+                    serverDownShown = false;
 
                     updateConnectionStatus(data.status, data.message, data.color, data.short);
                 })
@@ -5089,6 +5171,7 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
                     
                     if (statusFetchFailures >= maxStatusFailures) {
                         updateConnectionStatus('connerror', 'Error! Python script stopped?', 'red', 'rBrowser stopped?');
+                        showServerDown();
                     } else {
                         if (statusFetchFailures === 1) {
                             updateConnectionStatus('waiting', 'Checking connection...', 'yellow', 'Checking...');
@@ -5097,6 +5180,35 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
                         }
                     }
                 });
+        }
+
+        // Guest or another device: one red notice when rBrowser stops answering.
+        let serverDownShown = false;
+        function showServerDown() {
+            if (serverDownShown || window.__rbGuestEnded) return;
+            if (document.querySelector('.restart-overlay')) return;   // owner's own restart/shutdown
+            if (!window.rbGuest && isLoopbackHost(location.hostname)) return;
+            serverDownShown = true;
+            const bar = document.createElement('div');
+            bar.id = 'guest-ended-bar';
+            bar.className = 'server-down-bar';
+            bar.setAttribute('role', 'alert');
+            bar.textContent = window.rbGuest
+                ? "The owner's rBrowser is offline (stopped or restarted). If it does not come back, ask the owner for a new link."
+                : 'rBrowser is offline (stopped or restarted). This page is disconnected.';
+            document.body.appendChild(bar);
+        }
+
+        // Answering again: a green notice for a few seconds (a guest's own check runs at once).
+        function showServerBack() {
+            if (window.__rbGuestEnded) return;
+            const bar = document.createElement('div');
+            bar.className = 'server-back-bar';
+            bar.setAttribute('role', 'status');
+            bar.textContent = window.rbGuest ? "The owner's rBrowser is back online." : 'rBrowser is back online.';
+            document.body.appendChild(bar);
+            setTimeout(() => bar.remove(), 5000);
+            if (window.rbGuest && typeof window.guestCheckState === 'function') window.guestCheckState();
         }
 
         // rbrowser/rnswatch.py and netwatch.py: Reticulum's interfaces or the
@@ -5728,6 +5840,7 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
         }
 
         function saveFavorites() {
+            if (window.rbGuest) return;
             fetch('/api/favorites', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -5838,6 +5951,7 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
         }
 
         function toggleFavorite(hash, name) {
+            if (guestNoFavorites()) return;
             const existing = favoriteNodes.findIndex(fav => fav.hash === hash);
 
             if (existing >= 0) {
@@ -5928,6 +6042,7 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
         });
 
         function removeFavorite(hash) {
+            if (guestNoFavorites()) return;
             const index = favoriteNodes.findIndex(fav => fav.hash === hash);
             
             if (index >= 0) {
@@ -6678,7 +6793,7 @@ function showPingAlert(nodeName, nodeHash, rtt, hops) {
     
     const dialog = document.createElement('div');
     dialog.style.cssText = `
-        background: #161b22; border: 2px solid #30363d; color: #e6edf3;
+        background: var(--c-161b22); border: 2px solid var(--c-30363d); color: var(--c-e6edf3);
         padding: 20px; border-radius: 8px; max-width: 450px; min-width: 350px;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         box-shadow: 0 8px 24px rgba(0,0,0,0.5);
@@ -6688,35 +6803,35 @@ function showPingAlert(nodeName, nodeHash, rtt, hops) {
     
     dialog.innerHTML = `
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-            <h3 style="margin: 0; color: #3fb950; font-size: 18px;">✓ Valid Ping Reply!</h3>
+            <h3 style="margin: 0; color: var(--c-3fb950); font-size: 18px;">✓ Valid Ping Reply!</h3>
             <button onclick="this.parentElement.parentElement.parentElement.remove()" 
-                    style="background: none; border: none; color: #7d8590; cursor: pointer; font-size: 20px; padding: 0;">&times;</button>
+                    style="background: none; border: none; color: var(--c-7d8590); cursor: pointer; font-size: 20px; padding: 0;">&times;</button>
         </div>
         <div style="line-height: 1.8; font-size: 14px;">
             <div style="margin-bottom: 10px;">
-                <strong style="color: #ffa657;">Node:</strong> 
-                <span style="color: #e6edf3;">${escapeHtml(nodeName)}</span>
+                <strong style="color: var(--c-ffa657);">Node:</strong> 
+                <span style="color: var(--c-e6edf3);">${escapeHtml(nodeName)}</span>
             </div>
             <div style="margin-bottom: 10px;">
-                <strong style="color: #ffa657;">Address:</strong> 
-                <span style="font-family: monospace; font-size: 12px; background: #21262d; padding: 2px 6px; border-radius: 3px;">${nodeHash}</span>
+                <strong style="color: var(--c-ffa657);">Address:</strong> 
+                <span style="font-family: monospace; font-size: 12px; background: var(--c-21262d); padding: 2px 6px; border-radius: 3px;">${nodeHash}</span>
             </div>
             <div style="margin-bottom: 10px;">
-                <strong style="color: #ffa657;">Ping Duration:</strong> 
-                <span style="color: #3fb950; font-weight: bold;">${rtt.toFixed(3)}s</span>
+                <strong style="color: var(--c-ffa657);">Ping Duration:</strong> 
+                <span style="color: var(--c-3fb950); font-weight: bold;">${rtt.toFixed(3)}s</span>
             </div>
             <div style="margin-bottom: 10px;">
-                <strong style="color: #ffa657;">Hops There:</strong> 
-                <span style="color: #58a6ff;">${hopsDisplay}</span>
+                <strong style="color: var(--c-ffa657);">Hops There:</strong> 
+                <span style="color: var(--c-58a6ff);">${hopsDisplay}</span>
             </div>
             <div style="margin-bottom: 10px;">
-                <strong style="color: #ffa657;">Hops Back:</strong> 
-                <span style="color: #58a6ff;">${hopsDisplay}</span>
+                <strong style="color: var(--c-ffa657);">Hops Back:</strong> 
+                <span style="color: var(--c-58a6ff);">${hopsDisplay}</span>
             </div>
         </div>
         <div style="margin-top: 20px; text-align: center;">
             <button onclick="this.parentElement.parentElement.parentElement.remove();" 
-                    style="background: #238636; color: white; border: none; padding: 8px 24px; border-radius: 4px; cursor: pointer; font-size: 13px;">
+                    style="background: var(--c-238636); color: white; border: none; padding: 8px 24px; border-radius: 4px; cursor: pointer; font-size: 13px;">
                 OK
             </button>
         </div>
@@ -7463,28 +7578,29 @@ function showClientLinkMenu(anchor, t) {
         return;
     }
     const hash = t.kind === 'rrc' ? t.address.slice(6, 38).toLowerCase() : t.address.slice(0, 32).toLowerCase();
-    const copy = (text, what) => ({ label: `Copy ${what}`, run: () => copyText(text, `Copied:<br><code>${escapeHtml(text)}</code>`) });
+    const copy = (text, what) => ({ label: `Copy ${what}`, tip: `Copy the ${what} to the clipboard`,
+        run: () => copyText(text, `Copied:<br><code>${escapeHtml(text)}</code>`) });
     if (t.kind === 'rrc') {
         const on = typeof rrcEnabled === 'function' && rrcEnabled();
         openNodeMenu(anchor, 'RRC hub', t.address, [
             { label: on ? 'Open in RRC chat' : 'Open in RRC chat (turn it on in Settings)', disabled: !on,
-              run: () => openLinkTarget(t), tip: 'Connects to the hub in rBrowser\'s RRC client' },
+              run: () => openLinkTarget(t), tip: on ? 'Connect to this hub in the RRC chat' : 'Turn on the RRC client in Settings' },
             aspectCheckItem(anchor, hash, 'rrc.hub'),
             '-',
             copy(t.address, 'link'),
             copy(hash, 'address'),
-            { label: 'Check path', run: () => checkPath(hash, ''), tip: 'The path held to this address now. Nothing is sent' },
+            { label: 'Check path', run: () => checkPath(hash, ''), tip: 'Show the path to this hub, nothing is sent' },
         ]);
         return;
     }
     openNodeMenu(anchor, 'NomadNet page', t.address, [
-        { label: 'Open', run: () => openLinkTarget(t), tip: 'In a new page tab of rBrowser' },
+        { label: 'Open', run: () => openLinkTarget(t), tip: 'Open this page in a new tab' },
         aspectCheckItem(anchor, hash, 'nomadnetwork.node'),
         '-',
         copy(t.address, 'address'),
         copy(hash, 'node hash'),
-        { label: 'Ping node', run: () => pingNode(hash, ''), tip: 'Is it answering?' },
-        { label: 'Check path', run: () => checkPath(hash, ''), tip: 'The path held to this address now. Nothing is sent' },
+        { label: 'Ping node', run: () => pingNode(hash, ''), tip: 'Check if this node answers' },
+        { label: 'Check path', run: () => checkPath(hash, ''), tip: 'Show the path to this node, nothing is sent' },
     ]);
 }
 
@@ -9102,7 +9218,11 @@ function closeSettings() {
 // touch it, and it counts as changed while it differs from that. Identity
 // and auto-identify, the Links switch, Restore and Unblock apply on their
 // own and are left out.
-const SETTINGS_IMMEDIATE = '[data-cat="identity"], [data-cat="guest"], #settings-links-section, #hidden-nodes-body, #messenger-blocked, .settings-nav';
+// Sections with data-apply have their own Apply button: tracked apart from Save.
+// Fields saved the moment they change: never 'Unsaved'.
+const SETTINGS_IMMEDIATE = '[data-cat="identity"], [data-cat="access"]:not([data-apply]), #setting-guest-identity, #settings-links-section, #settings-monitor-section, #settings-radio-section, #hidden-nodes-body, #messenger-blocked, .settings-nav, '
+    + '#setting-autostart, #setting-shortcut-desktop, #setting-shortcut-menu, #setting-sounds-on, [id^="setting-sound-"], #setting-sounds-volume, '
+    + '#setting-search-in, #setting-update-check, #setting-update-every, #setting-update-auto, #setting-update-popup';
 const SETTINGS_FIELDS = '.toggle-switch, input, select, textarea';
 let settingsBaseline = new Map();
 
@@ -9150,15 +9270,32 @@ function trackSettingsChanges(dialog) {
     // After it.
     ['click', 'input', 'change'].forEach(type =>
         dialog.addEventListener(type, () => setTimeout(updateSettingsDirty, 0)));
+    dialog.addEventListener('click', e => {
+        const go = e.target.closest('[data-go]');
+        if (go) goToSettingsChange(go.dataset.go);
+    });
     document.addEventListener('keydown', settingsEscape, true);
 }
 
+// After an Apply (or Save) the fields hold the stored state again.
+function forgetSettingsBaseline(keep = () => false) {
+    for (const field of [...settingsBaseline.keys()]) if (!keep(field)) settingsBaseline.delete(field);
+    updateSettingsDirty();
+}
+
+function forgetApplied(key) {
+    forgetSettingsBaseline(field => field.closest('[data-apply]')?.dataset.apply !== key);
+}
+
 function settingsChanges() {
-    const cats = new Set();
+    const cats = new Set(), applies = new Map(), fields = [];
     for (const [field, before] of settingsBaseline) {
         if (!field.isConnected || settingsFieldState(field) === before) continue;
+        fields.push(field);
         const section = field.closest('.auto-reload-setting[data-cat]');
-        if (section) cats.add(section.dataset.cat);
+        if (!section) continue;
+        if (section.dataset.apply) applies.set(section.dataset.apply, section);
+        else cats.add(section.dataset.cat);
     }
     // Host or port different from what is saved: a restart is needed.
     // Only once the fields hold what is saved: empty, they would read as changed.
@@ -9166,41 +9303,65 @@ function settingsChanges() {
     const server = loaded ? readServerFields() : null;
     const restart = !!(server && 'host' in server);
     if (restart || (server && 'local_name' in server)) cats.add('system');
-    return { cats, restart };
+    return { cats, applies, restart, fields };
 }
+
+const settingsCatName = cat => (SETTINGS_CATEGORIES.find(c => c[0] === cat) || [, cat])[1];
 
 function updateSettingsDirty() {
     const dialog = document.querySelector('#settings-modal .settings-dialog');
     if (!dialog) return;
-    const { cats, restart } = settingsChanges();
+    const { cats, applies, restart, fields } = settingsChanges();
+    const applyCats = new Set([...applies.values()].map(s => s.dataset.cat));
     dialog.querySelectorAll('.settings-nav-item').forEach(item => {
-        item.classList.toggle('dirty', cats.has(item.dataset.cat));
+        item.classList.toggle('dirty', cats.has(item.dataset.cat) || applyCats.has(item.dataset.cat));
         item.classList.toggle('needs-restart', restart && item.dataset.cat === 'system');
     });
-    const dirtyNote = document.getElementById('settings-dirty-note');
-    if (dirtyNote) {
-        dirtyNote.hidden = !cats.size;
-        dirtyNote.textContent = restart ? 'Unsaved changes - restart needed' : 'Unsaved changes';
-    }
+    dialog.querySelectorAll('.settings-row.changed').forEach(row => row.classList.remove('changed'));
+    fields.forEach(f => f.closest('.settings-row')?.classList.add('changed'));
+    dialog.querySelectorAll('[data-apply-btn]').forEach(btn =>
+        btn.classList.toggle('pending', applies.has(btn.closest('[data-apply]')?.dataset.apply)));
+    dialog.querySelector('.btn-save')?.classList.toggle('pending', cats.size > 0);
     const restartNote = document.getElementById('server-restart-note');
     if (restartNote) restartNote.hidden = !restart;
-    dialog.querySelector('.btn-save')?.classList.toggle('pending', cats.size > 0);
+    const box = document.getElementById('settings-dirty-note');
+    if (!box) return;
+    const items = [...cats].map(c => [`cat:${c}`, settingsCatName(c), 'Save'])
+        .concat([...applies].map(([k, s]) => [`apply:${k}`, s.dataset.applyName || k, 'Apply']));
+    box.hidden = !items.length;
+    box.innerHTML = items.length ? `<span class="settings-dirty-dot"></span><b>${restart ? 'Unsaved - restart needed' : 'Unsaved changes'}</b>`
+        + items.map(([k, name, act]) => `<button type="button" class="settings-dirty-item" data-go="${escapeHtml(k)}" title="Show it: press ${act}">${escapeHtml(name)} <span>${act}</span></button>`).join('') : '';
+}
+
+// Footer reminder: a click shows the category, and the Apply button when it has one.
+function goToSettingsChange(key) {
+    const [kind, name] = key.split(':');
+    const dialog = document.querySelector('#settings-modal .settings-dialog');
+    if (!dialog) return;
+    const section = kind === 'apply' ? dialog.querySelector(`[data-apply="${name}"]`) : null;
+    showSettingsCategory(section ? section.dataset.cat : name);
+    const target = section ? section.querySelector('[data-apply-btn]') : dialog.querySelector('.settings-pane .settings-row.changed');
+    if (target) setTimeout(() => target.scrollIntoView({ block: 'center', behavior: 'smooth' }), 0);
 }
 
 // Close, x, Escape or a click outside: with changes not saved, ask first.
 async function requestCloseSettings() {
     if (!document.getElementById('settings-modal') || document.querySelector('.choice-modal')) return;
-    const { cats, restart } = settingsChanges();
-    if (!cats.size) { closeSettings(); return; }
+    const { cats, applies, restart } = settingsChanges();
+    if (!cats.size && !applies.size) { closeSettings(); return; }
     const names = SETTINGS_CATEGORIES.filter(c => cats.has(c[0])).map(c => c[1]);
+    const applyNames = [...applies.values()].map(s => s.dataset.applyName || s.dataset.apply);
+    const buttons = [{ label: 'Discard', value: 'discard', danger: true },
+                     { label: 'Keep editing', value: null }];
+    if (cats.size) buttons.push({ label: 'Save', value: 'save', primary: true });
     const choice = await showChoiceDialog({
-        title: 'Save your changes?',
-        html: `Changed and not saved: <strong>${names.map(escapeHtml).join(', ')}</strong>.`
+        title: cats.size ? 'Save your changes?' : 'Changes not applied',
+        html: (cats.size ? `Changed and not saved: <strong>${names.map(escapeHtml).join(', ')}</strong>.` : '')
+            + (applies.size ? `<div class="choice-warning">Not applied: <strong>${applyNames.map(escapeHtml).join(', ')}</strong>.`
+                              + ' Save does not apply them: use their own Apply button.</div>' : '')
             + (restart ? '<div class="choice-warning">The web server change needs a restart of rBrowser:'
                          + ' it is offered after saving.</div>' : ''),
-        buttons: [{ label: 'Discard', value: 'discard', danger: true },
-                  { label: 'Keep editing', value: null },
-                  { label: 'Save', value: 'save', primary: true }],
+        buttons,
     });
     if (choice === 'save') saveSettings({ close: true });
     else if (choice === 'discard') closeSettings();
@@ -9218,7 +9379,6 @@ const TERMINAL_LOG_CATEGORIES = [
     ['errors', 'Errors and warnings', 'Anything that went wrong'],
     ['connection', 'Connection', 'Reticulum connection, restarts'],
     ['identity', 'Identity changes', 'Switching to another identity'],
-    ['ephemeral', 'New ephemeral identities', 'A line every time the ephemeral identity is renewed'],
     ['announces', 'Announces', 'A line for every NomadNet announce heard'],
     ['messenger', 'Messenger (LXMF)', 'Messages in and out, LXMF announces, blocked senders'],
     ['propagation', 'Propagation nodes', 'Propagation nodes heard and chosen, syncs'],
@@ -9245,8 +9405,7 @@ const SETTINGS_CATEGORIES = [
     ['rrc', 'RRC Client', '<path d="M5.5 2.5l-1.5 11M11 2.5l-1.5 11M2.5 6h11M2 10.5h11"/>'],
     ['retibbs', 'BBS Client', '<rect x="2" y="2.5" width="12" height="9" rx="1"/><path d="M5 14h6M4.5 5.5h4M4.5 8h6"/>'],
     ['rmap', 'RMAP', '<path d="M1.5 3.5l4-1.5 5 2 4-1.5v10l-4 1.5-5-2-4 1.5z"/><path d="M5.5 2v10M10.5 4v10"/>'],
-    ['advanced', 'Advanced', '<path d="M3 4h10M3 8h10M3 12h10"/><circle cx="6" cy="4" r="1.4"/><circle cx="10.5" cy="8" r="1.4"/><circle cx="5" cy="12" r="1.4"/>'],
-    ['guest', 'Guest mode', '<circle cx="6" cy="5.5" r="2.4"/><path d="M1.5 13.5c.5-2.6 2.3-4 4.5-4s4 1.4 4.5 4"/><path d="M11 3.5h3.5M11 6h3.5M12.5 8.5H14.5"/>'],
+    ['access', 'Access & Remote', '<rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/><path d="M8 10v1.5"/>'],
     ['about', 'About', '<circle cx="8" cy="8" r="6"/><path d="M8 7.2v4M8 4.8h.01"/>'],
 ];
 
@@ -9352,7 +9511,7 @@ function settingsLineError(id, text) {
     el.style.color = '#f85149';
 }
 
-// Settings > System Setup > Access password: applied at once (not Save), each
+// Settings > Access & Remote > Access password: applied at once (not Save), each
 // change asking for the current password in a popup.
 async function loadAuthSettings() {
     let st;
@@ -9404,8 +9563,8 @@ async function loadAuthSettings() {
             const remote = await fetch('/api/remote').then(r => r.json()).catch(() => ({}));
             if (remote.settings && remote.settings.tunnel_on) {
                 await showChoiceDialog({
-                    title: 'Remote access is on',
-                    html: '<p>While the tunnel runs, anyone on the internet could open rBrowser without the password. Switch the Remote access tunnel off first (below).</p>',
+                    title: 'Remote Tunnel is on',
+                    html: '<p>While the tunnel runs, anyone on the internet could open rBrowser without the password. Switch the Remote Tunnel off first (below).</p>',
                     buttons: [{ label: 'OK', primary: true }]
                 });
                 back();
@@ -9430,27 +9589,28 @@ function authPost(body) {
 
 // Popup asking the current password for one change; again on a wrong one.
 // True once applied, false on Cancel or when locked out.
-async function authAskCurrent(title, html, okLabel, body) {
+async function authAskCurrent(title, html, okLabel, body, line = 'setting-auth-state') {
     let error = '';
     for (;;) {
         const typed = await showChoiceDialog({
             title, html: html + (error ? `<p style="color:#f85149">${escapeHtml(error)}</p>` : ''),
-            input: { type: 'password', placeholder: 'Your password', maxlength: 200 },
+            input: { type: 'password', placeholder: 'Your access password', maxlength: 200 },
             buttons: [{ label: 'Cancel', value: null }, { label: okLabel, primary: true, takesInput: true }]
         });
         if (typed === null) return false;
         const res = await authPost({ ...body, current: typed });
         if (res.status === 'success') return true;
         error = res.error;
-        // Locked out after too many tries: no point asking again now.
-        if (/Too many/.test(error)) { settingsLineError('setting-auth-state', error); return false; }
+        // Asked again only for a wrong password; locked out or another error: on the line.
+        if (/Too many/.test(error) || !/access password/.test(error)) { settingsLineError(line, error); return false; }
     }
 }
 
 // Set password (none yet) or Change password: the new one twice, and the
 // current one when there is one. extra goes along (enabled: switching on).
-async function authPasswordDialog(hasPassword, extra) {
+async function authPasswordDialog(hasPassword, extra, line = 'setting-auth-state') {
     const min = 6;
+    const forGuests = 'guest_enabled' in extra;
     let error = '';
     for (;;) {
         const fields = [{ type: 'password', placeholder: 'New password', maxlength: 200 },
@@ -9458,7 +9618,8 @@ async function authPasswordDialog(hasPassword, extra) {
         if (hasPassword) fields.unshift({ type: 'password', placeholder: 'Current password', maxlength: 200 });
         const typed = await showChoiceDialog({
             title: hasPassword ? 'Change password' : 'Set the access password',
-            html: `<p>At least ${min} characters. Only a hash of it is kept.</p>`
+            html: (forGuests ? '<p>Guests need an access password for you (the admin) first: set it here.</p>' : '')
+                + `<p>At least ${min} characters. Only a hash of it is kept.</p>`
                 + (error ? `<p style="color:#f85149">${escapeHtml(error)}</p>` : ''),
             inputs: fields,
             buttons: [{ label: 'Cancel', value: null },
@@ -9471,11 +9632,24 @@ async function authPasswordDialog(hasPassword, extra) {
         const res = await authPost({ ...extra, password: fresh, current });
         if (res.status === 'success') { loadAuthSettings(); return true; }
         error = res.error;
-        if (/Too many/.test(error)) { settingsLineError('setting-auth-state', error); return false; }
+        if (/Too many|^Guest/.test(error)) { settingsLineError(line, error); return false; }
     }
 }
 
-// Settings > Guest mode (rbrowser/auth.py): its own Apply, like the password.
+// Settings > Access & Remote > Guest mode (rbrowser/auth.py): its own Apply, asking your password.
+// Guest mode > Hub for guests: the owner's RRC hubs, the chosen one kept even if not listed.
+async function fillGuestHubChoice(select, chosen) {
+    let lists = {};
+    try { lists = await fetch('/api/rrc/hubs').then(r => r.json()); } catch (e) { /* only the chosen one */ }
+    const seen = new Map();
+    for (const key of ['favorites', 'history', 'heard'])
+        for (const h of (lists[key] || [])) if (!seen.has(h.address)) seen.set(h.address, h.name || '');
+    if (chosen && !seen.has(chosen)) seen.set(chosen, '');
+    select.innerHTML = '<option value="">Pick a hub…</option>' + [...seen].map(([a, name]) =>
+        `<option value="${a}">${escapeHtml(name || 'Unnamed hub')} · ${a.slice(0, 8)}…</option>`).join('');
+    select.value = chosen;
+}
+
 async function loadGuestSettings() {
     const state = document.getElementById('setting-guest-state');
     if (!state) return;
@@ -9484,32 +9658,361 @@ async function loadGuestSettings() {
     try { st = await fetch('/api/auth').then(r => r.json()); } catch (e) { return; }
     if (st.status !== 'success') return;
     const g = st.guest || {};
-    const toggles = { 'setting-guest-on': g.enabled, 'setting-guest-chat': g.chat, 'setting-guest-lxmf': g.messenger };
+    const toggles = { 'setting-guest-on': g.enabled, 'setting-guest-nomadnet': g.nomadnet, 'setting-guest-rrc': g.rrc,
+                      'setting-guest-bbs': g.bbs, 'setting-guest-lxmf': g.messenger, 'setting-guest-rmap': g.rmap, 'setting-guest-radio': g.radio,
+                      'setting-guest-favorites': g.favorites, 'setting-guest-history': g.history,
+                      'setting-guest-log': g.log, 'setting-guest-log-lxmf': g.log_lxmf, 'setting-guest-rrc-fixed': g.rrc_hub_on,
+                      'setting-guest-access-log': g.access_log };
     for (const [id, on] of Object.entries(toggles)) {
         const el = document.getElementById(id);
         el.classList.toggle('active', !!on);
         el.onclick = () => el.classList.toggle('active');
     }
+    // Off acts at once, like the password and the tunnel: a switch left off without Apply came back on.
+    const guestOn = document.getElementById('setting-guest-on');
+    guestOn.onclick = async () => {
+        guestOn.classList.toggle('active');
+        if (guestOn.classList.contains('active') || !g.enabled || !st.has_password || st.role === 'guest') return;
+        const done = await authAskCurrent('Switch guest mode off',
+            '<p>Guests are logged out now. Type YOUR access password (the admin one).</p>',
+            'Switch off', { guest_enabled: false }, 'setting-guest-state');
+        if (!done) { guestOn.classList.add('active'); return; }
+        showNotification('Guest mode off', 'success', 3000);
+        forgetApplied('guest');            // already done: nothing left to Apply
+        loadGuestSettings();
+    };
+    const fixedSwitch = document.getElementById('setting-guest-rrc-fixed');
+    const fixedRow = document.getElementById('setting-guest-rrc-hub-row');
+    const fixedHub = document.getElementById('setting-guest-rrc-hub');
+    fixedRow.hidden = !g.rrc_hub_on;
+    fixedSwitch.onclick = () => { fixedSwitch.classList.toggle('active'); fixedRow.hidden = !fixedSwitch.classList.contains('active'); };
+    fillGuestHubChoice(fixedHub, g.rrc_hub || '');
+    const logSwitch = document.getElementById('setting-guest-log');
+    const logBox = document.getElementById('setting-guest-log-box');
+    const logPath = document.getElementById('setting-guest-log-path');
+    logBox.hidden = !g.log;
+    logSwitch.onclick = () => { logSwitch.classList.toggle('active'); logBox.hidden = !logSwitch.classList.contains('active'); };
+    logPath.placeholder = g.log_default || '';
+    logPath.value = g.log_path && g.log_path !== g.log_default ? g.log_path : '';
+    document.getElementById('setting-guest-log-open').onclick = showGuestLog;
+    document.getElementById('setting-guest-log-clear').onclick = async () => {
+        if (!await confirmDialog('Clear guest log?', '<p>Everything logged so far is deleted.</p>', 'Clear')) return;
+        const res = await fetch('/api/guest/log/clear', { method: 'POST' }).then(r => r.json()).catch(e => ({ status: 'error', error: e.message }));
+        showNotification(res.status === 'success' ? 'Guest log cleared' : `Not cleared: ${escapeHtml(res.error || 'error')}`,
+                         res.status === 'success' ? 'success' : 'error', 3000);
+    };
+    const accessSwitch = document.getElementById('setting-guest-access-log');
+    const accessBox = document.getElementById('setting-guest-access-box');
+    accessBox.hidden = !g.access_log;
+    accessSwitch.onclick = () => { accessSwitch.classList.toggle('active'); accessBox.hidden = !accessSwitch.classList.contains('active'); };
+    document.getElementById('setting-guest-access-open').onclick = () => showGuestLog('access');
+    document.getElementById('setting-guest-access-clear').onclick = async () => {
+        if (!await confirmDialog('Clear guest access log?', '<p>Everything logged so far is deleted.</p>', 'Clear')) return;
+        const res = await fetch('/api/guest/log/access/clear', { method: 'POST' }).then(r => r.json()).catch(e => ({ status: 'error', error: e.message }));
+        showNotification(res.status === 'success' ? 'Guest access log cleared' : `Not cleared: ${escapeHtml(res.error || 'error')}`,
+                         res.status === 'success' ? 'success' : 'error', 3000);
+    };
+    if (st.role !== 'guest') watchGuestsOnline();
+    loadGuestIdentity(st.role === 'guest');
+    const mode = document.getElementById('setting-guest-mode');
+    const pass = document.getElementById('setting-guest-new');
+    mode.value = g.open ? 'open' : 'password';
+    pass.placeholder = g.has_password ? 'unchanged' : 'new guest password';
+    // Open guests: say who can get in, louder while the tunnel is on.
+    const showMode = async () => {
+        const open = mode.value === 'open';
+        document.getElementById('setting-guest-pass-row').hidden = open;
+        const note = document.getElementById('setting-guest-open-note');
+        note.hidden = !open;
+        if (!open) return;
+        const remote = await fetch('/api/remote').then(r => r.json()).catch(() => ({}));
+        const tunnel = !!(remote.settings && remote.settings.tunnel_on);
+        note.style.color = tunnel ? '#f0883e' : '';
+        note.textContent = tunnel
+            ? 'Remote Tunnel is on: anyone with the tunnel link can enter as a guest, no password.'
+            : 'Anyone who can open rBrowser (your network, or the Remote Tunnel link) can enter as a guest.';
+    };
+    mode.onchange = showMode;
+    showMode();
     state.textContent = st.role === 'guest' ? 'You are a guest: these settings are read only.'
-        : !st.has_password ? 'Set the access password first (System).'
-        : !g.has_password ? 'No guest password set yet.'
-        : g.active ? 'On: the login page takes the guest password too.'
+        : !st.has_password ? 'Guests need the access password: Apply sets it.'
+        : !g.has_password && !g.open ? 'No guest password set yet.'
+        : g.active ? (g.open ? 'On: the login page has an "Enter as guest" button.'
+                             : 'On: the login page takes the guest password too.')
         : g.enabled ? 'On, but the access password is off: nobody is asked, so there are no guests.'
         : 'Off.';
     document.getElementById('setting-guest-apply').onclick = async () => {
         const on = id => document.getElementById(id).classList.contains('active');
-        const body = { guest_enabled: on('setting-guest-on'), guest_chat: on('setting-guest-chat'),
-                       guest_messenger: on('setting-guest-lxmf'),
-                       guest_password: document.getElementById('setting-guest-new').value,
-                       current: document.getElementById('setting-guest-current').value };
-        const res = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                               body: JSON.stringify(body) }).then(r => r.json()).catch(e => ({ status: 'error', error: e.message }));
-        if (res.status !== 'success') { settingsLineError('setting-guest-state', res.error); return; }
-        document.getElementById('setting-guest-new').value = '';
-        document.getElementById('setting-guest-current').value = '';
-        showNotification(res.guest && res.guest.enabled ? 'Guest mode on' : 'Guest mode off', 'success', 3000);
+        const open = mode.value === 'open';
+        const body = { guest_enabled: on('setting-guest-on'), guest_open: open,
+                       guest_nomadnet: on('setting-guest-nomadnet'), guest_rrc: on('setting-guest-rrc'),
+                       guest_bbs: on('setting-guest-bbs'), guest_messenger: on('setting-guest-lxmf'),
+                       guest_rmap: on('setting-guest-rmap'), guest_radio: on('setting-guest-radio'),
+                       guest_favorites: on('setting-guest-favorites'), guest_history: on('setting-guest-history'), guest_password: open ? '' : pass.value,
+                       guest_log: on('setting-guest-log'), guest_log_path: logPath.value.trim(),
+                       guest_log_lxmf: on('setting-guest-log-lxmf'),
+                       guest_max: parseInt(document.getElementById('setting-guest-max').value, 10) || 3,
+                       guest_access_log: on('setting-guest-access-log'),
+                       guest_rrc_hub_on: on('setting-guest-rrc-fixed'), guest_rrc_hub: fixedHub.value };
+        if (body.guest_rrc_hub_on && !body.guest_rrc_hub) {
+            showNotification('Fixed RRC hub for guests: pick the hub', 'warning', 4000);
+            return;
+        }
+        // Guests need the access password asked: Apply switches it on too.
+        if (body.guest_enabled) body.enabled = true;
+        // Your password only for who gets in: guest mode on/off, open/password, a new guest password.
+        const guarded = body.guest_enabled !== !!g.enabled || body.guest_open !== !!g.open
+            || !!body.guest_password || (body.enabled && !st.enabled);
+        let done;
+        if (st.has_password && !guarded) {
+            const res = await authPost(body);
+            if (res.status !== 'success') { settingsLineError('setting-guest-state', res.error || 'Not applied'); return; }
+            pass.value = '';
+            showNotification('Guest settings applied', 'success', 3000);
+            loadGuestSettings();
+            loadAuthSettings();
+            return;
+        }
+        done = !st.has_password
+            ? await authPasswordDialog(false, body, 'setting-guest-state')
+            : await authAskCurrent('Apply guest mode',
+                '<p>Type YOUR access password (the admin one), not the guest one.</p>'
+                + (body.enabled && !st.enabled ? '<p>This also switches the access password on: guests need it.</p>' : ''),
+                'Apply', body, 'setting-guest-state');
+        if (!done) return;
+        pass.value = '';
+        showNotification(body.guest_enabled ? 'Guest mode on' : 'Guest mode off', 'success', 3000);
         loadGuestSettings();
+        loadAuthSettings();
     };
+    // The fields now hold what the server has.
+    forgetApplied('guest');
+}
+
+// Settings > Guest mode > Guests online: the live list, every 5 s while it is in sight.
+let guestsOnlineTimer = null;
+function watchGuestsOnline() {
+    const box = document.getElementById('setting-guest-online');
+    if (!box) return;
+    const closeAll = document.getElementById('setting-guest-close-all');
+    closeAll.onclick = async () => {
+        if (!await confirmDialog('Close all guest sessions?', '<p>Every guest is logged out now. They can log in again.</p>', 'Close all')) return;
+        const res = await fetch('/api/guest/sessions/close-all', { method: 'POST' }).then(r => r.json()).catch(e => ({ status: 'error', error: e.message }));
+        showNotification(res.status === 'success' ? 'Guest sessions closed' : `Not closed: ${escapeHtml(res.error || 'error')}`,
+                         res.status === 'success' ? 'success' : 'error', 3000);
+        load();
+    };
+    const ago = s => s < 60 ? `${Math.max(0, Math.round(s))} s ago` : `${Math.round(s / 60)} min ago`;
+    const load = async () => {
+        if (!box.isConnected) { clearInterval(guestsOnlineTimer); guestsOnlineTimer = null; return; }
+        if (box.offsetParent === null) return;
+        const res = await fetch('/api/guest/sessions').then(r => r.json()).catch(() => null);
+        if (!res || res.status !== 'success') return;
+        const rows = res.sessions || [];
+        closeAll.disabled = !rows.length;
+        const count = document.getElementById('setting-guest-online-count');
+        if (count) count.textContent = res.max ? `${rows.length} of ${res.max}` : rows.length;
+        const since = t => new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const html = !res.active ? '<div class="settings-hint">Guest mode is off.</div>'
+            : !rows.length ? '<div class="settings-hint">Nobody right now.</div>'
+            : rows.map(r => `<div class="guest-online-row">
+                <span class="guest-online-who" title="${escapeHtml(r.agent)}">${escapeHtml(r.address)} · ${escapeHtml(shortAgent(r.agent))}</span>
+                <span class="guest-online-when">${r.away ? '<b class="guest-away" title="Silent: its identity and place are kept 5 min, or given to a new guest if all places are taken">away</b> · ' : ''}in since ${since(r.since)} · seen ${ago(res.now - r.last)}${r.clients.length ? ' · ' + escapeHtml(r.clients.join(', ')) : ''}</span>
+                ${guestIdentityLine(r.identity)}
+                <button type="button" class="settings-export guest-kick" data-id="${escapeHtml(r.id)}" title="Log this guest out now (they can log in again)">Kick</button>
+                <button type="button" class="settings-export guest-ban" data-id="${escapeHtml(r.id)}" title="Log this guest out and keep them out: their address and their browser">Ban</button></div>`).join('');
+        if (box.dataset.html !== html) { box.dataset.html = html; box.innerHTML = html; }
+        const bans = res.bans || [];
+        const left = b => { const s = b.until - res.now;
+            return !b.until ? 'until Unban' : s < 3600 ? Math.max(1, Math.ceil(s / 60)) + ' min left' : Math.round(s / 3600) + ' h left'; };
+        const bhtml = !bans.length ? '<div class="settings-hint">Nobody banned.</div>'
+            : bans.map(b => `<div class="guest-online-row">
+                <span class="guest-online-who" title="${escapeHtml(b.agent || '')}">${escapeHtml(b.address || '?')} · ${escapeHtml(shortAgent(b.agent || ''))}</span>
+                <span class="guest-online-when">since ${since(b.since)} · ${left(b)}${b.device ? ' · address + browser' : ' · address'}</span>
+                <button type="button" class="settings-export guest-unban" data-id="${escapeHtml(b.id)}" title="Let them in again">Unban</button></div>`).join('');
+        if (banBox && banBox.dataset.html !== bhtml) { banBox.dataset.html = bhtml; banBox.innerHTML = bhtml; }
+    };
+    const banBox = document.getElementById('setting-guest-bans');
+    if (banBox) banBox.onclick = async e => {
+        const btn = e.target.closest('.guest-unban');
+        if (!btn) return;
+        btn.disabled = true;
+        const res = await fetch('/api/guest/sessions/unban', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: btn.dataset.id }) }).then(r => r.json()).catch(e => ({ status: 'error', error: e.message }));
+        showNotification(res.status === 'success' ? 'Guest unbanned' : escapeHtml(res.error || 'Not done'),
+                         res.status === 'success' ? 'success' : 'warning', 3000);
+        load();
+    };
+    const ban = async id => {
+        const ask = confirmDialog('Ban this guest?', `<p>Logged out now and kept out: their address and their browser.
+            Your password still works from there.</p>
+            <select id="guest-ban-time" class="settings-input">
+            <option value="900">15 minutes</option><option value="3600">1 hour</option>
+            <option value="86400">24 hours</option><option value="0">Until Unban</option></select>`, 'Ban');
+        const sel = document.getElementById('guest-ban-time');
+        let seconds = sel ? sel.value : '900';
+        if (sel) sel.onchange = () => { seconds = sel.value; };
+        if (!await ask) return;
+        const res = await fetch('/api/guest/sessions/ban', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, seconds: Number(seconds) }) }).then(r => r.json()).catch(e => ({ status: 'error', error: e.message }));
+        showNotification(res.status === 'success' ? 'Guest banned' : escapeHtml(res.error || 'Not done'),
+                         res.status === 'success' ? 'success' : 'warning', 3000);
+        load();
+    };
+    box.onclick = async e => {
+        const banBtn = e.target.closest('.guest-ban');
+        if (banBtn) { ban(banBtn.dataset.id); return; }
+        const btn = e.target.closest('.guest-kick');
+        if (!btn) return;
+        btn.disabled = true;
+        const res = await fetch('/api/guest/sessions/kick', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: btn.dataset.id }) }).then(r => r.json()).catch(e => ({ status: 'error', error: e.message }));
+        showNotification(res.status === 'success' ? 'Guest logged out' : escapeHtml(res.error || 'Not done'),
+                         res.status === 'success' ? 'success' : 'warning', 3000);
+        load();
+    };
+    load();
+    clearInterval(guestsOnlineTimer);
+    guestsOnlineTimer = setInterval(load, 5000);
+}
+
+// Guest log: node hashes shown by name (hash in the tooltip), a User-Agent made short.
+const GLOG_HASH = /\b[0-9a-f]{32}\b/g;
+function glogName(hash) {
+    const name = typeof getNodeName === 'function' ? getNodeName(hash) : '';
+    return name && name !== hash ? name : '';
+}
+function namesIn(text) {
+    return (String(text).match(GLOG_HASH) || []).map(glogName).filter(Boolean).join(' ');
+}
+function glogText(text) {
+    let out = '', last = 0;
+    for (const m of String(text).matchAll(GLOG_HASH)) {
+        if (m.index < last) continue;
+        out += escapeHtml(text.slice(last, m.index));
+        last = m.index + m[0].length;
+        // "hash [Name]": the name the server knew when it wrote the line.
+        const written = text.slice(last).match(/^ \[([^\]]*)\]/);
+        if (written) last += written[0].length;
+        const name = (written && written[1]) || glogName(m[0]);
+        out += `<span class="glog-node" title="${m[0]}">${escapeHtml(name || m[0])}</span>`;
+        // "hash:/page/x.mu": the path after a space, not glued to the name.
+        if (text[last] === ':' && text[last + 1] === '/') { out += ' '; last += 1; }
+    }
+    return out + escapeHtml(text.slice(last));
+}
+function shortAgent(ua) {
+    const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome'
+        : /Safari\//.test(ua) ? 'Safari' : 'browser';
+    const os = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Windows/.test(ua) ? 'Windows'
+        : /Mac OS/.test(ua) ? 'macOS' : /Linux/.test(ua) ? 'Linux' : '';
+    return os ? `${browser} on ${os}` : browser;
+}
+
+// Open log: the end of the guest log in a window (works from a phone too). 'access': the access log.
+async function showGuestLog(which) {
+    const access = which === 'access';
+    const api = access ? '/api/guest/log/access' : '/api/guest/log';
+    const overlay = document.createElement('div');
+    overlay.className = 'auto-reload-modal';
+    overlay.innerHTML = `<div class="auto-reload-dialog guest-log-dialog">
+        <div class="dialog-header"><h3>${access ? 'Guest access log' : 'Guest log'}</h3></div>
+        <div class="settings-hint guest-log-path"></div>
+        <input type="search" class="guest-log-filter" placeholder="Filter (address, node, text...)" aria-label="Filter the log">
+        <div class="guest-log-list">Loading...</div>
+        <div class="auto-reload-actions">
+            <button class="btn-cancel guest-log-file">Open file</button>
+            <button class="btn-cancel guest-log-refresh">Refresh</button>
+            <button class="btn-save">Close</button>
+        </div></div>`;
+    const list = overlay.querySelector('.guest-log-list');
+    const filter = overlay.querySelector('.guest-log-filter');
+    let rows = [];
+    const render = () => {
+        const q = filter.value.trim().toLowerCase();
+        const shown = q ? rows.filter(r => r.raw.toLowerCase().includes(q)) : rows;
+        list.innerHTML = shown.length ? shown.map(r => `<div class="glog-row${r.bad ? ' glog-bad' : ''}${r.kind === 'Login' ? ' glog-login' : ''}">
+                <span class="glog-time" title="${escapeHtml(r.date)}">${escapeHtml(r.time)}</span>
+                <span class="glog-who">${escapeHtml(r.who)}</span>
+                <span class="glog-kind glog-k-${r.kind.toLowerCase()}">${escapeHtml(r.kind)}</span>
+                <span class="glog-text"${r.title ? ` title="${escapeHtml(r.title)}"` : ''}>${glogText(r.text)}</span></div>`).join('')
+            : `<div class="settings-hint">${q ? 'Nothing matches the filter.' : access ? 'Empty: no guest logins yet.' : 'Empty: no guest actions logged yet.'}</div>`;
+    };
+    // "2026-11-14 22:10:01  192.168.1.5  Page abc:/page/index.mu": newest first, the date only if not today.
+    const now = new Date();
+    const todayStr = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
+    const parse = text => {
+        const out = [];
+        for (const line of text.split(/\r?\n/).filter(Boolean).reverse()) {
+            const m = line.match(/^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d)\s+(\S+)\s+(.*)$/);
+            if (!m) { out.push({ raw: line, date: '', time: '', who: '', kind: '', text: line, bad: false }); continue; }
+            let [, date, time, who, rest] = m;
+            // Access lines: "address  session-id  Login ..."; action lines: "address  rB2.Guest1.ab12  Page ...".
+            const sid = access && rest.match(/^(\S+)\s+(.*)$/);
+            if (sid) { who = `${who} #${sid[1]}`; rest = sid[2]; }
+            const gname = !access && rest.match(/^(rB2\.Guest\S*)\s+(.*)$/);
+            if (gname) { who = `${gname[1]} · ${who}`; rest = gname[2]; }
+            const sp = rest.indexOf(' ');
+            const kind = sp > 0 ? rest.slice(0, sp) : rest;
+            let body = sp > 0 ? rest.slice(sp + 1) : '', title = '';
+            // Login lines carry the whole User-Agent: shown short, whole in the tooltip.
+            const ua = body.match(/^(.*?)\s*\[(.+)\]$/);
+            if (kind === 'Login' && ua) { body = `${ua[1]} · ${shortAgent(ua[2])}`; title = ua[2]; }
+            out.push({ raw: line + ' ' + namesIn(rest), date, time: date === todayStr ? time : `${date.slice(5)} ${time}`,
+                       who, kind: /^[A-Za-z]+$/.test(kind) ? kind : '', text: body, title,
+                       bad: /\[HTTP \d+\]|refused/i.test(rest) });
+        }
+        return out;
+    };
+    const load = async () => {
+        const res = await fetch(api).then(r => r.json()).catch(e => ({ status: 'error', error: e.message }));
+        overlay.querySelector('.guest-log-path').textContent = (res.path || '')
+            + (res.status === 'success' ? ` · ${Math.ceil((res.size || 0) / 1024)} KB` + (res.cut ? ' · last 256 KB shown' : '') : '');
+        if (res.status !== 'success') { rows = []; list.textContent = `Not readable: ${res.error || 'error'}`; return; }
+        rows = parse(res.text || '');
+        render();
+        list.scrollTop = 0;
+    };
+    filter.oninput = render;
+    overlay.querySelector('.guest-log-file').onclick = async () => {
+        const res = await fetch(api + '/open', { method: 'POST' }).then(r => r.json()).catch(e => ({ status: 'error', error: e.message }));
+        if (res.status !== 'success') showNotification(escapeHtml(res.error || 'Could not open the file'), 'error', 5000);
+    };
+    const close = () => overlay.remove();
+    overlay.querySelector('.guest-log-refresh').onclick = load;
+    overlay.querySelector('.btn-save').onclick = close;
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+    document.body.appendChild(overlay);
+    load();
+}
+
+// One line per guest identity: its name (and the names it chose), the stamp, its hashes (click = copy).
+function guestIdentityLine(e) {
+    if (!e) return '';
+    const names = Object.entries(e.names || {}).filter(([, v]) => v)
+        .map(([k, v]) => `${k || 'all'}: ${escapeHtml(v)}`).join(', ');
+    const lxmf = !e.ready ? 'making its LXMF stamp…' : e.lxmf ? 'LXMF on' : 'no LXMF (no stamp)';
+    const hex = s => String(s || '').replace(/[^0-9a-f]/gi, '');
+    return `<span class="guest-online-id"><b>${escapeHtml(e.name)}</b>${names ? ` (${names})` : ''} · ${lxmf}
+        · <span class="mono" onclick="copyText('${hex(e.identity_hash)}')" title="Identity hash ${hex(e.identity_hash)} - click to copy">id ${hex(e.identity_hash).slice(0, 8)}…</span>
+        · <span class="mono" onclick="copyText('${hex(e.lxmf_address)}')" title="LXMF address ${hex(e.lxmf_address)} - click to copy">lxmf ${hex(e.lxmf_address).slice(0, 8)}…</span></span>`;
+}
+
+// Settings > Guest mode > Guest identities: the max for the owner, its own identity for a guest.
+async function loadGuestIdentity(asGuest) {
+    const box = document.getElementById('setting-guest-identity');
+    if (!box) return;
+    const g = await fetch('/api/guest/identity').then(r => r.json()).catch(e => ({ status: 'error', error: e.message }));
+    const max = document.getElementById('setting-guest-max');
+    if (max) {
+        max.value = g.max || 3;
+        max.closest('.settings-row').hidden = !!asGuest;
+    }
+    box.innerHTML = !asGuest ? ''
+        : g.status === 'success'
+            ? `<div class="settings-hint">Yours: ${escapeHtml(g.name)}</div>`
+              + identityValueRow('LXMF address', g.lxmf_address) + identityValueRow('Identity hash', g.identity_hash)
+            : `<span class="settings-hint">${escapeHtml(g.error || 'Not available')}</span>`;
 }
 
 // A guest sees every setting but changes none: fields and buttons in the
@@ -9535,7 +10038,7 @@ function lockSettingsForGuest(dialog) {
     dialog.querySelector('.dialog-footer .btn-save')?.remove();
 }
 
-// Settings > System Setup > Remote access + Dynamic DNS (rbrowser/remote.py):
+// Settings > Access & Remote > Remote Tunnel + Dynamic DNS (rbrowser/remote.py):
 // applied at once, like the password. The state is asked again every few
 // seconds while the dialog is open (the tunnel takes a moment to start).
 async function loadRemoteSettings(first = true) {
@@ -9602,8 +10105,13 @@ async function loadRemoteSettings(first = true) {
         };
         // The toggle acts at once (the dialog's generic click handler flips it first).
         tunnel.addEventListener('click', () => setTimeout(async () => {
-            const res = await send({ tunnel_on: tunnel.classList.contains('active') }, 'setting-remote-state');
-            if (res.status !== 'success') tunnel.classList.remove('active');
+            const wanted = tunnel.classList.contains('active');
+            const res = await send({ tunnel_on: wanted }, 'setting-remote-state');
+            // Refused: back to what the server still has (a failed "off" used to look off).
+            if (res.status !== 'success') {
+                tunnel.classList.toggle('active', !wanted);
+                showNotification(`Remote Tunnel not changed: ${escapeHtml(res.error || 'error')}`, 'error', 6000);
+            }
         }, 0));
         const ddnsApply = async () => {
             const on = document.getElementById('setting-ddns-on');
@@ -9612,7 +10120,7 @@ async function loadRemoteSettings(first = true) {
                                      ddns_url: document.getElementById('setting-ddns-url').value,
                                      ddns_domain: document.getElementById('setting-ddns-domain').value,
                                      ddns_token: document.getElementById('setting-ddns-token').value }, 'setting-ddns-state');
-            if (res.status === 'success') showNotification('Dynamic DNS saved', 'success', 3000);
+            if (res.status === 'success') { showNotification('Dynamic DNS saved', 'success', 3000); forgetApplied('ddns'); }
             return res;
         };
         document.getElementById('setting-ddns-apply').onclick = ddnsApply;
@@ -9628,6 +10136,7 @@ async function loadRemoteSettings(first = true) {
 }
 
 function showSettings(category) {
+    if (window.rbGuest) return;
     closeSettings();
 
     const overlay = document.createElement('div');
@@ -9731,6 +10240,36 @@ function showSettings(category) {
             </div>`).join('')}
         </div>
 
+        <div class="auto-reload-setting" data-cat="system" id="settings-monitor-section">
+            <div class="settings-label">rB2 Monitor</div>
+            <div class="settings-hint">A MON tab, last in the tab bar: Reticulum, network, announces and every client
+                on one live page. Read only, never shown to guests. Applied at once.</div>
+            <div class="settings-row">
+                <span>Show the MON tab</span>
+                <div class="toggle-switch ${typeof monitorOn === 'function' && monitorOn() ? 'active' : ''}" id="setting-monitor" onclick="toggleMonitorSetting(this)"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row">
+                <span title="Scanlines, glow, a soft blur and flicker, as an old CRT screen">Terminal CRT EFX</span>
+                <div class="toggle-switch ${typeof monitorFxOn === 'function' && monitorFxOn() ? 'active' : ''}" id="setting-monitor-fx" onclick="toggleMonitorSetting(this, MONITOR_FX_KEY)"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row">
+                <span title="The colours of the Monitor; the ◐ button in its bar goes to the next one">Monitor theme</span>
+                <select id="setting-monitor-theme" class="settings-select" onchange="setMonitorTheme(this.value)">
+                    ${typeof MON_THEMES !== 'undefined' ? MON_THEMES.map(([k, l]) => `<option value="${k}"${k === monitorTheme() ? ' selected' : ''}>${escapeHtml(l)}</option>`).join('') : ''}
+                </select>
+            </div>
+        </div>
+
+        <div class="auto-reload-setting" data-cat="system" id="settings-radio-section">
+            <div class="settings-label">Radio-LXST Client</div>
+            <div class="settings-hint">A RADIO tab to listen to radio-lxst stations over Reticulum. The sound plays on
+                this device, it keeps playing on the other tabs. Never shown to guests. Applied at once.</div>
+            <div class="settings-row">
+                <span>Show the RADIO tab</span>
+                <div class="toggle-switch ${typeof radioOn === 'function' && radioOn() ? 'active' : ''}" id="setting-radio" onclick="toggleRadioSetting(this)"><div class="toggle-slider"></div></div>
+            </div>
+        </div>
+
         <div class="auto-reload-setting" data-cat="system">
             <div class="settings-label">Notifications and log</div>
             <div class="settings-row">
@@ -9739,6 +10278,12 @@ function showSettings(category) {
                     <option value="all">All</option>
                     <option value="errors">Errors and warnings only</option>
                     <option value="none">None</option>
+                </select>
+            </div>
+            <div class="settings-row">
+                <span title="The colours of rBrowser and of NomadNet pages (as NomadNet's light theme). Auto follows the system">Theme</span>
+                <select id="setting-theme" class="settings-select">
+                    ${THEMES.map(([k, label]) => `<option value="${k}">${label}</option>`).join('')}
                 </select>
             </div>
             <div class="settings-row">
@@ -9826,7 +10371,7 @@ function showSettings(category) {
             <div class="settings-hint" id="setting-netwatch-last" style="margin:0"></div>
         </div>
 
-        <div class="auto-reload-setting" data-cat="system">
+        <div class="auto-reload-setting" data-cat="access">
             <div class="settings-label">Access password</div>
             <div class="settings-hint">rBrowser listens on your network, so a phone can use it: anyone on the same
                 network can open it too, read your messages and use your identities. On a network that is not
@@ -9849,14 +10394,14 @@ function showSettings(category) {
             </div>
         </div>
 
-        <div class="auto-reload-setting" data-cat="system">
-            <div class="settings-label">Remote access</div>
+        <div class="auto-reload-setting" data-cat="access">
+            <div class="settings-label">Remote Tunnel</div>
             <div class="settings-hint">Use rBrowser from outside your network with a link, no router port to open:
                 a free Cloudflare tunnel (cloudflared, downloaded once, no account). The link is https and changes
                 each time the tunnel starts. Cloudflare carries the traffic: the access password above must be on.
                 Applied at once.</div>
             <div class="settings-row">
-                <span title="Off: nothing reaches rBrowser from outside. Remembered: on again at the next start">Remote access tunnel</span>
+                <span title="Off: nothing reaches rBrowser from outside. Remembered: on again at the next start">Remote Tunnel</span>
                 <div class="toggle-switch" id="setting-remote-tunnel"><div class="toggle-slider"></div></div>
             </div>
             <div class="settings-row">
@@ -9868,7 +10413,7 @@ function showSettings(category) {
             </div>
         </div>
 
-        <div class="auto-reload-setting" data-cat="system">
+        <div class="auto-reload-setting" data-cat="access" data-apply="ddns" data-apply-name="Dynamic DNS">
             <div class="settings-label">Dynamic DNS</div>
             <div class="settings-hint">Only if you opened a port on your router by hand: a free name kept pointed
                 at your public IP (checked every 5 minutes). Not needed for the tunnel. Without https on that port
@@ -9900,7 +10445,7 @@ function showSettings(category) {
             </div>
             <div class="settings-row">
                 <span id="setting-ddns-state" class="settings-hint" style="margin:0;word-break:break-all"></span>
-                <button type="button" class="msg-bar-btn primary" id="setting-ddns-apply">Apply</button>
+                <button type="button" class="msg-bar-btn primary" id="setting-ddns-apply" data-apply-btn>Apply</button>
             </div>
         </div>
 
@@ -10200,16 +10745,16 @@ function showSettings(category) {
                 <select id="setting-msg-identity" class="settings-select"></select>
             </div>
             <div class="settings-row">
-                <span title="Each identity has its own name; ephemeral ones are eph_ and 4 characters of the address unless renamed">Name in announces (this identity)</span>
+                <span title="Each identity has its own name">Name in announces (this identity)</span>
                 <input id="setting-msg-name" class="settings-input" type="text" maxlength="64"
                        spellcheck="false" placeholder="Anonymous Peer">
             </div>
             <div class="settings-row">
-                <span title="Fixed identities only: an ephemeral one is never announced on its own">Announce at start</span>
+                <span>Announce at start</span>
                 <div class="toggle-switch" id="setting-msg-announce-start"><div class="toggle-slider"></div></div>
             </div>
             <div class="settings-row">
-                <span title="Fixed identities only. Never more often than every 20 minutes">Announce every</span>
+                <span title="Never more often than every 20 minutes">Announce every</span>
                 <div class="settings-inline">
                     <div class="toggle-switch" id="setting-msg-announce-periodic"><div class="toggle-slider"></div></div>
                     <select id="setting-msg-announce-minutes" class="settings-select"></select>
@@ -10236,10 +10781,6 @@ function showSettings(category) {
             <div class="settings-row">
                 <span title="Add contact first checks what the address is (one path request if it was never heard) and asks before adding something that is not an LXMF address">Check new contacts</span>
                 <div class="toggle-switch" id="setting-msg-check-contacts"><div class="toggle-slider"></div></div>
-            </div>
-            <div class="settings-row">
-                <span title="A short message goes as one packet, without opening a link first: faster, and it gets through where links struggle. Longer messages and files still go by link">Send short messages in one packet (opportunistic)</span>
-                <div class="toggle-switch" id="setting-msg-opportunistic"><div class="toggle-slider"></div></div>
             </div>
             <div class="settings-row">
                 <span title="Every saved identity lists the contacts of the others too, under the name of the identity they belong to. Messages stay with their identity: writing to a shared contact starts a conversation with the identity in use">Share contact list between identities</span>
@@ -10310,7 +10851,13 @@ function showSettings(category) {
                        spellcheck="false" placeholder="32 hex characters">
             </div>
             <div class="settings-row">
-                <span title="As NomadNet does: tried once, if a node is set">If direct delivery fails, leave it on the node</span>
+                <span title="A message not delivered is sent again this many times, with a fresh path each time; then, if set below, it is left on the propagation node. How it goes (one packet or by link) rBrowser picks itself, as Sideband does">Retry a failed message</span>
+                <select id="setting-msg-retries" class="settings-select">
+                    ${Array.from({ length: 10 }, (_, i) => `<option value="${i + 1}">${i + 1} time${i ? 's' : ''}</option>`).join('')}
+                </select>
+            </div>
+            <div class="settings-row">
+                <span title="After the retries, if a node is set">Send to propagation node on fail</span>
                 <div class="toggle-switch" id="setting-msg-pn-fallback"><div class="toggle-slider"></div></div>
             </div>
             <div class="settings-row">
@@ -10401,8 +10948,12 @@ function showSettings(category) {
                 <div class="toggle-switch" id="setting-rrc-compact"><div class="toggle-slider"></div></div>
             </div>
             <div class="settings-row">
-                <span title="Colours and styles other rBrowsers give their messages (the palette by the message box). Off: their messages in plain text. Other clients never see them">Show colours from others</span>
+                <span title="Colours and styles in others' messages: rBrowser's palette and the Micron colours NomadNet sends (pictures too). Off: their messages in plain text">Show colours from others</span>
                 <div class="toggle-switch" id="setting-rrc-colors"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row">
+                <span title="Bold, italics, code, lists, quotes and tables written in Markdown, drawn as NomadNet draws them. For new messages">Render Markdown</span>
+                <div class="toggle-switch" id="setting-rrc-markdown"><div class="toggle-slider"></div></div>
             </div>
             <div class="settings-row">
                 <span title="The size of the chat text and of the people list; larger for who reads badly">Chat text size</span>
@@ -10525,6 +11076,19 @@ function showSettings(category) {
                 <div class="toggle-switch" id="setting-rrc-notify-events"><div class="toggle-slider"></div></div>
             </div>
             <div class="settings-hint">Each pop-up has its switch; the sounds for them are in System &gt; Sounds.</div>
+            <div class="settings-row settings-subhead" id="rrc-stickers-settings"><span>Stickers</span></div>
+            <div class="settings-row">
+                <span title="Write a single emoji in a room: its stickers show above the bar, click one to send it. Other rBrowsers with the same pack see the sticker, everyone else the emoji">Enable stickers</span>
+                <div class="toggle-switch" id="setting-rrc-stickers"><div class="toggle-slider"></div></div>
+            </div>
+            <div id="rrc-sticker-packs" class="rrc-sticker-packs" hidden></div>
+            <div id="rrc-tg-block" hidden>
+                <div class="settings-row">
+                    <span title="Import Telegram sticker sets from their links, with a Telegram bot of your own">Enable Telegram stickers</span>
+                    <div class="toggle-switch" id="setting-rrc-tg-stickers"><div class="toggle-slider"></div></div>
+                </div>
+                <div id="rrc-tg-body" class="rrc-sticker-packs" hidden></div>
+            </div>
         </div>
         <div class="auto-reload-setting" data-cat="retibbs">
             <div class="settings-label">BBS Client</div>
@@ -10549,6 +11113,13 @@ function showSettings(category) {
             <div class="settings-row">
                 <span title="Dialing like a modem while connecting, text scrolling in line by line, a CRT glow. A key or a click skips the effect">Terminal Effect (80s/90s GFX)</span>
                 <div class="toggle-switch" id="setting-bbs-fx"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row">
+                <span title="Size of the BBS screen text. Auto: as wide as the pane, up to 17 px">Screen font size</span>
+                <select id="setting-bbs-font" class="settings-select">
+                    <option value="0">Auto (fit, up to 17 px)</option>
+                    ${[10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24, 26, 28].map(n => `<option value="${n}">${n} px</option>`).join('')}
+                </select>
             </div>
             <div class="settings-row">
                 <span title="A RetiBBS account is the identity you log in with: the same identity next time, the same account">Log in as</span>
@@ -10589,58 +11160,122 @@ function showSettings(category) {
                 terms forbid it. The node list itself always comes from rmap.world. With RMAP off, rBrowser makes
                 no request outside Reticulum.</div>
         </div>
-        <div class="auto-reload-setting" data-cat="advanced" id="settings-advanced-section" hidden>
-            <div class="settings-label">Advanced</div>
-            <div class="settings-hint">Options for people who know what they do. Unlocked from About;
-                described in the README.</div>
-            <div class="settings-row">
-                <span>Allow ephemeral identity messages</span>
-                <div class="toggle-switch" id="setting-msg-allow-ephemeral"><div class="toggle-slider"></div></div>
-            </div>
-            <div class="settings-hint">Lets the messenger write with the ephemeral identity. It changes at restart,
-                at reload or on its timer: replies that arrive after the change are lost. Kept in memory only,
-                never announced on its own, at most one message every 10 s and 20 an hour. Recipients can still
-                ignore you or ask for a stamp.</div>
-            <button class="settings-export" onclick="lockAdvanced()">Hide Advanced</button>
-        </div>
-
-        <div class="auto-reload-setting" data-cat="guest">
+        <div class="auto-reload-setting" data-cat="access" data-apply="guest" data-apply-name="Guest mode">
             <div class="settings-label">Guest mode</div>
-            <div class="settings-hint">Let other people try this rBrowser, for example through the Remote access
-                link: they log in with a guest password and can browse and open the Settings to read them, but
-                change nothing - the server refuses it, whatever page they use. They use the identity you have
-                chosen here, and cannot switch it or see its keys. Needs the access password on (System); your
-                password keeps giving full access. Applied with its own button, at once.</div>
+            <div class="settings-hint">Let other people try this rBrowser, for example through the Remote Tunnel
+                link: they log in with a guest password and use the clients you open to them below, as you set
+                them up. They never see the Settings, and the server refuses any change, whatever page they use.
+                Needs the access password (top of this page); your password keeps giving full access. Apply asks
+                for your password only to switch guest mode on or off, change open/password or set a new guest
+                password.</div>
             <div class="settings-row">
                 <span title="The login page also takes the guest password, for a read-only session">Allow guests</span>
                 <div class="toggle-switch" id="setting-guest-on"><div class="toggle-slider"></div></div>
             </div>
+            <div class="identity-subhead">Guests online: <span id="setting-guest-online-count">0</span></div>
+            <div id="setting-guest-online" class="guest-online-list"></div>
+            <div class="settings-row settings-cache-buttons">
+                <button type="button" class="settings-export" id="setting-guest-close-all"
+                        title="Every guest is logged out now; they can log in again">Close all</button>
+            </div>
+            <div class="identity-subhead">Banned guests</div>
+            <div id="setting-guest-bans" class="guest-online-list"></div>
+            <div class="identity-subhead">Guest identities</div>
+            <div class="settings-hint">Each guest gets an identity of its own while it is in, for every client: never yours, never another guest's. Its name and hashes are in Guests online.</div>
+            <div id="setting-guest-identity"></div>
             <div class="settings-row">
-                <span title="Guests can connect to RRC hubs and BBS servers and write there, with your identity and nick">Guests can chat (RRC, BBS)</span>
-                <div class="toggle-switch" id="setting-guest-chat"><div class="toggle-slider"></div></div>
+                <span title="How many guests can be in at once, each with its own identity (1-30). Applied with Apply">Max guests</span>
+                <input type="number" id="setting-guest-max" class="settings-input" min="1" max="30" step="1">
+            </div>
+            <div class="settings-hint">What guests can use. Off: the client is hidden from them and the server refuses it.</div>
+            <div class="settings-row">
+                <span>NomadNet pages</span>
+                <div class="toggle-switch" id="setting-guest-nomadnet"><div class="toggle-slider"></div></div>
             </div>
             <div class="settings-row">
-                <span title="Off: the LXMF tab is hidden from guests and the server refuses it. On: they read and write YOUR messages">Guests can use the LXMF messenger</span>
+                <span>RRC chat</span>
+                <div class="toggle-switch" id="setting-guest-rrc"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row">
+                <span title="On: guests are connected to the hub you pick, and cannot open any other">Fixed RRC hub for guests</span>
+                <div class="toggle-switch" id="setting-guest-rrc-fixed"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row" id="setting-guest-rrc-hub-row" hidden>
+                <span title="Your favourites, the hubs you have been on and those heard">Hub for guests</span>
+                <select id="setting-guest-rrc-hub" class="settings-select"></select>
+            </div>
+            <div class="settings-row">
+                <span>BBS client</span>
+                <div class="toggle-switch" id="setting-guest-bbs"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row">
+                <span>LXMF messenger</span>
                 <div class="toggle-switch" id="setting-guest-lxmf"><div class="toggle-slider"></div></div>
             </div>
             <div class="settings-row">
-                <span>Guest password</span>
-                <input type="password" id="setting-guest-new" class="settings-input" autocomplete="new-password" placeholder="unchanged">
+                <span>RMAP</span>
+                <div class="toggle-switch" id="setting-guest-rmap"><div class="toggle-slider"></div></div>
             </div>
             <div class="settings-row">
-                <span title="Your access password: needed for any change">Your password</span>
-                <input type="password" id="setting-guest-current" class="settings-input" autocomplete="current-password">
+                <span title="Guests listen with their guest identity, each on a call of its own">Radio</span>
+                <div class="toggle-switch" id="setting-guest-radio"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row">
+                <span title="Off: guests see no favorites. They can never change them">Guests see my favorites</span>
+                <div class="toggle-switch" id="setting-guest-favorites"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row">
+                <span title="Off: guests see an empty history. Pages opened by guests never go into your history">Guests see my history</span>
+                <div class="toggle-switch" id="setting-guest-history"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row">
+                <span title="With a password: guests type it on the login page. No password: the login page has an 'Enter as guest' button">Guest login</span>
+                <select id="setting-guest-mode" class="settings-select">
+                    <option value="password">With a guest password</option>
+                    <option value="open">No password (open)</option>
+                </select>
+            </div>
+            <div class="settings-row" id="setting-guest-pass-row">
+                <span title="The password your guests type on the login page, not yours">Guest password</span>
+                <input type="password" id="setting-guest-new" class="settings-input" autocomplete="new-password" placeholder="new guest password">
+            </div>
+            <div class="settings-hint" id="setting-guest-open-note" hidden></div>
+            <div class="settings-row">
+                <span title="One line per thing a guest does (pages, downloads, messages, chat lines, refused requests). The login page tells guests">Log guest actions</span>
+                <div class="toggle-switch" id="setting-guest-log"><div class="toggle-slider"></div></div>
+            </div>
+            <div id="setting-guest-log-box" hidden>
+                <div class="settings-row">
+                    <span title="Off: the log says who a guest wrote to or heard from, not what. The login page tells guests">Log LXMF message text</span>
+                    <div class="toggle-switch" id="setting-guest-log-lxmf"><div class="toggle-slider"></div></div>
+                </div>
+                <div class="settings-row">
+                    <span title="A .log or .txt file. Empty: the default in the rBrowser folder. Applied with Apply">Guest log file</span>
+                    <input type="text" id="setting-guest-log-path" class="settings-input" spellcheck="false" autocomplete="off">
+                </div>
+                <div class="settings-row settings-cache-buttons">
+                    <button type="button" class="settings-export" id="setting-guest-log-open">Open log</button>
+                    <button type="button" class="settings-export" id="setting-guest-log-clear">Clear log</button>
+                </div>
+            </div>
+            <div class="settings-row">
+                <span title="Logins, logouts, kicks and sessions gone silent, in guest_access.log next to the guest actions log">Log guest access</span>
+                <div class="toggle-switch" id="setting-guest-access-log"><div class="toggle-slider"></div></div>
+            </div>
+            <div class="settings-row settings-cache-buttons" id="setting-guest-access-box" hidden>
+                <button type="button" class="settings-export" id="setting-guest-access-open">Open log</button>
+                <button type="button" class="settings-export" id="setting-guest-access-clear">Clear log</button>
             </div>
             <div class="settings-row">
                 <span id="setting-guest-state" class="settings-hint" style="margin:0"></span>
-                <button type="button" class="msg-bar-btn primary" id="setting-guest-apply">Apply</button>
+                <button type="button" class="msg-bar-btn primary" id="setting-guest-apply" data-apply-btn>Apply</button>
             </div>
         </div>
 
         <div class="auto-reload-setting" data-cat="about">
             <div class="settings-label">About</div>
             <div class="settings-about-logo">${rbLogo('', true)}
-            <div class="settings-about" id="settings-version" onclick="aboutVersionTap()">rBrowser v2.0.6b</div></div>
+            <div class="settings-about" id="settings-version">rBrowser v2.0.7b</div></div>
             <div class="settings-running-on" data-running-on>Loading...</div>
             <div class="settings-hint">Beta: some parts of the interface may still have bugs; they are fixed as soon as possible.</div>
             <div class="settings-hint" id="settings-usage" title="rBrowser's Python process; page = this browser tab (Chrome/Edge only)"></div>
@@ -10720,7 +11355,7 @@ function showSettings(category) {
     dialog.querySelector('#setting-history-max').value = String(historySettings.max_entries);
     dialog.querySelector('#setting-history-age').value = String(historySettings.max_age_days);
 
-    dialog.querySelectorAll('#setting-center, #setting-light-render, #setting-screenshots, #setting-local-name-on, #setting-new-nodes, #setting-clear-search, #setting-prefill, #setting-history-enabled, #setting-cache-enabled, #setting-cache-serve, #setting-msg-enabled, #setting-msg-announce-start, #setting-msg-announce-periodic, #setting-msg-allow-ephemeral, #setting-msg-enforce-stamps, #setting-msg-markdown, #setting-msg-check-contacts, #setting-msg-sideband-look, #setting-msg-autosend, #setting-msg-previews, #setting-msg-autoreply, #setting-msg-echo, #setting-msg-opportunistic, #setting-msg-share-contacts, #setting-bbs-enabled, #setting-bbs-proto-retibbs, #setting-bbs-proto-nomadnet, #setting-bbs-fx, #setting-rmap-enabled, #setting-auth-on, #setting-auth-local, #setting-remote-tunnel, #setting-ddns-on, #setting-rrc-enabled, #setting-rrc-nick-on, #setting-rrc-joins, #setting-rrc-reconnect, #setting-rrc-autoconnect, #setting-rrc-autoconnect-sel, #setting-rrc-rejoin, #setting-rrc-compact, #setting-rrc-colors, #setting-rrc-ts-desktop, #setting-rrc-ts-short, #setting-rrc-ts-mobile, #setting-rrc-autoclose-nodes, #setting-rrc-notices-hub, #setting-rrc-show-auto, #setting-rrc-notify-mentions, #setting-rrc-notify-messages, #setting-rrc-notify-events, #setting-rrc-autoreply, #setting-rrc-echo, #setting-rrc-away-notice, #setting-rrc-away-nick-on, #setting-rrc-back-notice, #setting-msg-pn-on, #setting-msg-pn-fallback, #setting-msg-pn-failover, #setting-msg-sync-periodic, #setting-favorites-enabled, #setting-favorites-follow, #setting-app-window-lxmf, #setting-app-window-rrc, #setting-app-window-bbs, #setting-app-window-rmap')
+    dialog.querySelectorAll('#setting-center, #setting-light-render, #setting-screenshots, #setting-local-name-on, #setting-new-nodes, #setting-clear-search, #setting-prefill, #setting-history-enabled, #setting-cache-enabled, #setting-cache-serve, #setting-msg-enabled, #setting-msg-announce-start, #setting-msg-announce-periodic, #setting-msg-enforce-stamps, #setting-msg-markdown, #setting-msg-check-contacts, #setting-msg-sideband-look, #setting-msg-autosend, #setting-msg-previews, #setting-msg-autoreply, #setting-msg-echo, #setting-msg-share-contacts, #setting-bbs-enabled, #setting-bbs-proto-retibbs, #setting-bbs-proto-nomadnet, #setting-bbs-fx, #setting-rmap-enabled, #setting-auth-on, #setting-auth-local, #setting-remote-tunnel, #setting-ddns-on, #setting-rrc-enabled, #setting-rrc-nick-on, #setting-rrc-joins, #setting-rrc-reconnect, #setting-rrc-autoconnect, #setting-rrc-autoconnect-sel, #setting-rrc-rejoin, #setting-rrc-compact, #setting-rrc-colors, #setting-rrc-stickers, #setting-rrc-tg-stickers, #setting-rrc-markdown, #setting-rrc-ts-desktop, #setting-rrc-ts-short, #setting-rrc-ts-mobile, #setting-rrc-autoclose-nodes, #setting-rrc-notices-hub, #setting-rrc-show-auto, #setting-rrc-notify-mentions, #setting-rrc-notify-messages, #setting-rrc-notify-events, #setting-rrc-autoreply, #setting-rrc-echo, #setting-rrc-away-notice, #setting-rrc-away-nick-on, #setting-rrc-back-notice, #setting-msg-pn-on, #setting-msg-pn-fallback, #setting-msg-pn-failover, #setting-msg-sync-periodic, #setting-favorites-enabled, #setting-favorites-follow, #setting-app-window-lxmf, #setting-app-window-rrc, #setting-app-window-bbs, #setting-app-window-rmap, #setting-splash')
           .forEach(toggle => toggle.addEventListener('click', function () {
               this.classList.toggle('active');
           }));
@@ -10729,6 +11364,7 @@ function showSettings(category) {
 
     dialog.querySelector('#setting-notifications').value = getNotificationPolicy();
     dialog.querySelector('#setting-statusbar').value = getStatusBarPos();
+    dialog.querySelector('#setting-theme').value = themeChoice();
     {
         const sounds = soundSettings();
         dialog.querySelector('#setting-sounds-on').classList.toggle('active', sounds.on);
@@ -10958,12 +11594,11 @@ async function toggleLinks(toggle) {
 
 let messengerState = null;
 
-function fillMessengerIdentitySelect(profiles, allowEphemeral, value) {
+function fillMessengerIdentitySelect(profiles, value) {
     const select = document.getElementById('setting-msg-identity');
     if (!select) return;
     const options = (profiles || []).filter(p => p.loadable)
         .map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`);
-    if (allowEphemeral) options.push('<option value="ephemeral">Ephemeral (replies lost when it changes)</option>');
     select.innerHTML = options.join('');
     select.value = value;
 }
@@ -10976,8 +11611,8 @@ function refreshIdentityPickers(state) {
     if (select && messengerState) {
         const s = messengerState.settings || {};
         const shown = select.value;
-        const known = (state.profiles || []).some(p => p.loadable && p.id === shown) || shown === 'ephemeral';
-        fillMessengerIdentitySelect(state.profiles, s.allow_ephemeral, known ? shown : s.identity);
+        const known = (state.profiles || []).some(p => p.loadable && p.id === shown);
+        fillMessengerIdentitySelect(state.profiles, known ? shown : s.identity);
     }
     if (typeof refreshRrcIdentityChoices === 'function') refreshRrcIdentityChoices();
     if (typeof refreshRetibbsIdentityChoices === 'function') refreshRetibbsIdentityChoices();
@@ -11113,7 +11748,8 @@ function appDownloadFolder(folder) {
 let filesAsk = false;    // the server's default too (files.py)
 let filesLocal = false;  // on the computer running rBrowser: saved files can be opened
 function refreshFilesAsk() {
-    if (window.rbGuest) return;
+    // A guest's screenshots and downloads are saved on the guest's device, never on this computer.
+    if (window.rbGuest) { filesAsk = true; return; }
     fetch('/api/files').then(r => r.json()).then(s => {
         if (s.status !== 'success') return;
         filesAsk = !!s.ask;
@@ -11147,7 +11783,6 @@ async function loadMessengerSettings() {
     if (enabledToggle && state.settings) enabledToggle.dataset.loaded = '1';
     setToggle('setting-msg-announce-start', s.announce_at_start);
     setToggle('setting-msg-announce-periodic', s.announce_periodic);
-    setToggle('setting-msg-allow-ephemeral', s.allow_ephemeral);
     setToggle('setting-msg-enforce-stamps', s.enforce_stamps !== false);
     setToggle('setting-msg-markdown', s.markdown !== false);
     setToggle('setting-msg-check-contacts', s.check_new_contacts !== false);
@@ -11155,7 +11790,7 @@ async function loadMessengerSettings() {
     setToggle('setting-msg-autosend', !!s.autosend_files);
     setToggle('setting-msg-previews', s.image_previews !== false);
     setToggle('setting-msg-autoreply', !!s.autoreply_on);
-    setToggle('setting-msg-opportunistic', !!s.opportunistic);
+    document.getElementById('setting-msg-retries').value = String(s.send_retries || 5);
     setToggle('setting-msg-share-contacts', !!s.share_contacts);
     setToggle('setting-msg-echo', !!s.echo_on);
     const setValue = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
@@ -11177,7 +11812,7 @@ async function loadMessengerSettings() {
     }
 
     const select = document.getElementById('setting-msg-identity');
-    fillMessengerIdentitySelect(ids.profiles, s.allow_ephemeral, s.identity);
+    fillMessengerIdentitySelect(ids.profiles, s.identity);
     // Each identity has its own name: the field follows the one chosen.
     const name = document.getElementById('setting-msg-name');
     if (name) name.value = s.display_name || '';
@@ -11196,8 +11831,6 @@ async function loadMessengerSettings() {
         }
         minutes.value = String(s.announce_minutes);
     }
-    const advanced = document.getElementById('settings-advanced-section');
-    if (advanced) advanced.hidden = !s.advanced_unlocked;
     renderMessengerStatus();
     renderBlockedContacts(state.blocked || []);
     await loadPropagationSettings(s);
@@ -11321,14 +11954,10 @@ function renderPropagationStatus(p) {
     } else if (node) {
         line = 'Not synced yet.';
     }
-    if (p.ephemeral) {
-        line = '<span class="settings-warning-inline">The ephemeral identity is in use: propagation nodes are'
-             + ' for saved identities only, nothing is left on a node or collected from one.</span>';
-    }
     box.innerHTML = html + (line ? `<div>${line}</div>` : '');
     const now = document.getElementById('messenger-sync-now');
     const cancel = document.getElementById('messenger-sync-cancel');
-    if (now) now.disabled = !node || sync.kind === 'busy' || !!p.ephemeral;
+    if (now) now.disabled = !node || sync.kind === 'busy';
     if (cancel) cancel.hidden = sync.kind !== 'busy';
 }
 
@@ -11391,11 +12020,11 @@ function renderMessengerStatus() {
     } else {
         const announced = st.last_announce
             ? `last announce ${new Date(st.last_announce * 1000).toLocaleTimeString()}` : 'not announced yet';
-        box.innerHTML = `<div class="messenger-identity${st.ephemeral ? ' ephemeral' : ''}">`
+        box.innerHTML = `<div class="messenger-identity">`
             + `<span class="messenger-identity-label">In use</span>`
             + `<span class="messenger-identity-name">${escapeHtml(st.identity_name)}</span>`
             + `<code>${escapeHtml(st.address)}</code></div>`
-            + `<div>${escapeHtml(announced)}${st.ephemeral ? ' - ephemeral: replies are lost when it changes' : ''}.</div>`;
+            + `<div>${escapeHtml(announced)}.</div>`;
     }
     const button = document.getElementById('messenger-announce-now');
     if (button) button.disabled = !st.running;
@@ -11430,7 +12059,6 @@ function readMessengerFields() {
         announce_at_start: on('setting-msg-announce-start'),
         announce_periodic: on('setting-msg-announce-periodic'),
         announce_minutes: Number(document.getElementById('setting-msg-announce-minutes').value),
-        allow_ephemeral: on('setting-msg-allow-ephemeral'),
         ...(document.getElementById('setting-msg-stamp-cost').options.length ? {
             stamp_cost: Number(document.getElementById('setting-msg-stamp-cost').value),
             enforce_stamps: on('setting-msg-enforce-stamps'),
@@ -11440,7 +12068,7 @@ function readMessengerFields() {
             autosend_files: on('setting-msg-autosend'),
             image_previews: on('setting-msg-previews'),
             autoreply_on: on('setting-msg-autoreply'),
-            opportunistic: on('setting-msg-opportunistic'),
+            send_retries: Number(document.getElementById('setting-msg-retries').value) || 5,
             share_contacts: on('setting-msg-share-contacts'),
             autoreply_rules: document.getElementById('setting-msg-rules').value,
             echo_on: on('setting-msg-echo'),
@@ -11492,11 +12120,6 @@ async function messengerAnnounceNow() {
         showNotification(escapeHtml(data.error || 'Announce failed'), 'error', 5000);
     }
 }
-
-// Like Android's developer options: seven taps on the version. Nothing is
-// secret about it - the README says what it unlocks.
-let aboutTaps = 0;
-let aboutTapTimer = null;
 
 // ─── Check for updates (rbrowser/updates.py) ───
 // version.txt here against the one on GitHub; at start when switched on
@@ -11837,7 +12460,7 @@ async function runSelfUpdate(restart) {
 
 // rBrowser's version on the empty pages of the clients (version.txt, via
 // /api/version): "rBrowser v2.0.0" and the client's name under it, as its title.
-let RB_VERSION = '2.0.6b';
+let RB_VERSION = '2.0.7b';
 
 function clientWelcome(icon, name) {
     return `<div class="client-welcome">${rbLogo('rb-logo-welcome')}<h2 class="rb-version">rBrowser v${RB_VERSION}</h2>
@@ -11852,33 +12475,6 @@ fetch('/api/version').then(r => r.json()).then(info => {
     const bar = document.getElementById('sb-version');
     if (bar) bar.textContent = `rBv${RB_VERSION}`;
 }).catch(() => {});
-
-function aboutVersionTap() {
-    if (messengerState && messengerState.settings && messengerState.settings.advanced_unlocked) {
-        showNotification('Advanced options are already shown', 'info', 2500);
-        return;
-    }
-    aboutTaps += 1;
-    clearTimeout(aboutTapTimer);
-    aboutTapTimer = setTimeout(() => { aboutTaps = 0; }, 3000);
-    const left = 7 - aboutTaps;
-    if (left > 0) {
-        if (aboutTaps >= 3) showNotification(`${left} more tap${left === 1 ? '' : 's'} to show Advanced options`, 'info', 1200);
-        return;
-    }
-    aboutTaps = 0;
-    saveMessengerSettings({ advanced_unlocked: true }).then(() => {
-        showNotification('Advanced options are now shown in Settings', 'success', 4000);
-        loadMessengerSettings();
-    });
-}
-
-function lockAdvanced() {
-    saveMessengerSettings({ advanced_unlocked: false }).then(() => {
-        showNotification('Advanced options hidden; ephemeral messages are off again', 'info', 4000);
-        loadMessengerSettings();
-    });
-}
 
 // ─────────────────────────────────────────────────────────────
 // Visited page cache
@@ -12327,29 +12923,30 @@ function renderIdentitySettings() {
 
     const profileRows = s.profiles.map(p => {
         const inUse = p.id === s.active;
+        const usedIn = (s.used_in && s.used_in[p.id]) || [];
         const tags = (p.is_default ? ' <span class="identity-tag">default</span>' : '')
-                   + (inUse ? ' <span class="identity-tag in-use">in use</span>' : '')
+                   + (usedIn.length ? ` <span class="identity-tag in-use">Used in ${usedIn.map(escapeHtml).join(' · ')}</span>` : '')
                    + (p.loadable ? '' : ' <span class="identity-tag bad">unreadable</span>');
         return `
             <div class="identity-profile ${inUse ? 'current' : ''}">
                 <div class="identity-profile-main">
                     <span class="identity-profile-name">${escapeHtml(p.name)}${tags}</span>
+                    <span class="identity-profile-addr id-hash mono" onclick="copyText('${p.identity_hash}')"
+                          title="Identity hash - click to copy"><span class="identity-profile-kind">ID</span>${p.identity_hash || ''}</span>
                     <span class="identity-profile-addr mono" onclick="copyText('${p.lxmf_address}')"
-                          title="LXMF address - click to copy">${p.lxmf_address || ''}</span>
+                          title="LXMF address - click to copy"><span class="identity-profile-kind">LXMF</span>${p.lxmf_address || ''}</span>
                 </div>
                 <div class="identity-profile-actions">
                     ${!inUse && p.loadable ? `<button onclick="useIdentity('${p.id}')">Use</button>` : ''}
                     <button onclick="renameIdentity('${p.id}')">Rename</button>
                     <button onclick="window.location='/api/identities/${p.id}/export'"
                             title="Download the key file (a private key)">Export</button>
-                    ${!p.is_default && !inUse
+                    ${!p.is_default && !inUse && !usedIn.length
                         ? `<button class="danger" onclick="deleteIdentity('${p.id}')">Delete</button>` : ''}
                 </div>
             </div>`;
     }).join('');
 
-    const eph = s.ephemeral;
-    const usedNames = eph.used_on.map(u => escapeHtml(u.node_name || u.node.slice(0, 16))).join(', ');
     const saved = s.profiles.find(p => !p.is_default);
     const folder = saved
         ? `<code>${escapeHtml(saved.file_path.replace(/[\\/][^\\/]+$/, ''))}</code>`
@@ -12358,13 +12955,10 @@ function renderIdentitySettings() {
     body.innerHTML = `
         <div class="settings-row">
             <span>Saved identity in use</span>
-            <select id="identity-active" class="settings-select" onchange="useIdentity(this.value)"
-                    ${s.ephemeral_on ? 'disabled title="Switch ephemeral off to choose a saved identity"' : ''}>
+            <select id="identity-active" class="settings-select" onchange="useIdentity(this.value)">
                 ${s.profiles.map(p => `<option value="${p.id}" ${p.loadable ? '' : 'disabled'}>${escapeHtml(p.name)}</option>`).join('')}
             </select>
         </div>
-        ${s.ephemeral_on ? `<div class="settings-hint settings-warning-inline" style="margin-top: 6px;">
-            Ephemeral identity in use: the details below are temporary.</div>` : ''}
         <div style="margin-top: 8px;">
             ${identityValueRow('LXMF address', s.active_identity.lxmf_address)}
             ${identityValueRow('Identity hash', s.active_identity.identity_hash)}
@@ -12381,60 +12975,10 @@ function renderIdentitySettings() {
                     title="Download every saved identity in one zip (private keys)">Export all</button>
         </div>
 
-        <div class="identity-subhead">Ephemeral</div>
-        <div class="settings-hint">A temporary identity kept in memory only. Use Keep to save it;
-            once replaced it cannot be recovered.</div>
-        <div class="settings-row">
-            <span>Use ephemeral identity</span>
-            <div class="toggle-switch ${s.ephemeral_on ? 'active' : ''}" id="ephemeral-switch"
-                 onclick="toggleEphemeral(!identityState.ephemeral_on)">
-                <div class="toggle-slider"></div>
-            </div>
-        </div>
-        <div class="settings-hint" style="margin-top: 6px;">${s.ephemeral_on
-            ? `Saved identities are paused. Turn off to return to <strong>${escapeHtml(s.last_fixed_name)}</strong>.`
-            : 'Turn on to browse with a temporary identity.'}</div>
-        <div class="settings-row">
-            <span>Replace</span>
-            <select id="ephemeral-mode" class="settings-select" onchange="setEphemeralMode(this.value)">
-                <option value="session">At every rBrowser start</option>
-                <option value="reload">At every page reload</option>
-                <option value="timed">Timed</option>
-            </select>
-        </div>
-        ${s.ephemeral_mode === 'timed' ? `
-        <div class="settings-row">
-            <span>Interval</span>
-            <select id="ephemeral-interval" class="settings-select" onchange="setEphemeralInterval(this.value)">
-                ${(s.ephemeral_intervals || []).map(v => `<option value="${v}">${formatInterval(v)}</option>`).join('')}
-            </select>
-        </div>` : ''}
-        <div class="settings-hint" style="margin-top: 6px;">${{
-            session: 'Replaced each time rBrowser starts.',
-            reload: 'Replaced when you press Reload (Alt+B). Following links keeps it.',
-            timed: (s.ephemeral_on && s.ephemeral_rotates_in !== null
-                    ? `Next change at ${new Date(Date.now() + s.ephemeral_rotates_in * 1000).toLocaleTimeString()}. `
-                    : 'Replaced automatically at the set interval. ')
-                   + 'Open pages are not reloaded.',
-        }[s.ephemeral_mode] || ''}</div>
-        ${identityValueRow('LXMF address', eph.lxmf_address)}
-        ${identityValueRow('Identity hash', eph.identity_hash)}
-        <div class="identity-row">
-            <span class="identity-label">Identified to</span>
-            <span class="identity-value">${usedNames || 'no node yet'}</span>
-        </div>
-        <div class="settings-row settings-cache-buttons">
-            <button class="settings-export" onclick="keepEphemeral()">Keep as saved identity</button>
-            <button class="settings-export" onclick="rotateEphemeral()">New ephemeral now</button>
-        </div>
-
         <div class="settings-hint settings-warning">Identity files are private keys. Back them up and never share them.
             Default: <code>nomadnet_browser_identity</code>. Others: ${folder}.</div>`;
 
-    body.querySelector('#identity-active').value = s.ephemeral_on ? s.last_fixed : s.active;
-    body.querySelector('#ephemeral-mode').value = s.ephemeral_mode;
-    const interval = body.querySelector('#ephemeral-interval');
-    if (interval) interval.value = String(s.ephemeral_interval);
+    body.querySelector('#identity-active').value = s.active;
     updateVanityButton();
     renderAutoIdentifySettings();
 }
@@ -12451,7 +12995,6 @@ function renderAutoIdentifySettings() {
             <span class="binding-node" title="${b.node}">${escapeHtml(b.node_name || b.node.slice(0, 16) + '…')}</span>
             <select name="binding-${b.node}" aria-label="Identity for this node" class="settings-select" data-node="${b.node}"
                     onchange="setBinding('${b.node}', this.value)">
-                ${b.profile_id === 'ephemeral' ? '<option value="ephemeral">Ephemeral (not kept)</option>' : ''}
                 ${choices}
             </select>
             <button class="binding-forget" onclick="setBinding('${b.node}', '')"
@@ -12476,27 +13019,9 @@ function renderAutoIdentifySettings() {
     });
 }
 
-// The ephemeral switch: on uses the throwaway identity, off goes back to the
-// saved identity that was in use before (the server remembers which).
-async function toggleEphemeral(on) {
-    try {
-        const state = await identityRequest('/api/identities/ephemeral/toggle', { on: !!on });
-        showNotification(on
-            ? 'Ephemeral on.'
-            : `Ephemeral off: <strong>${escapeHtml(state.active_name)}</strong> in use.`,
-            'success', 4000);
-    } catch (e) {
-        showNotification(`Could not switch: ${escapeHtml(e.message)}`, 'error', 5000);
-        renderIdentitySettings();
-    }
-}
-
 async function useIdentity(id) {
     if (!identityState || id === identityState.active) return;
-    if (id !== 'ephemeral') {
-        const target = identityState.profiles.find(p => p.id === id);
-        if (!target) return;
-    }
+    if (!identityState.profiles.find(p => p.id === id)) return;
     try {
         await identityRequest('/api/identities/active', { id });
         showNotification(`Now using <strong>${escapeHtml(identityLabel())}</strong>.<br>`
@@ -12579,31 +13104,6 @@ async function deleteIdentity(id) {
     } catch (e) {
         showNotification(`Could not delete: ${escapeHtml(e.message)}`, 'error', 5000);
     }
-}
-
-async function setEphemeralMode(mode) {
-    try {
-        await identityRequest('/api/identities/options', { ephemeral_mode: mode });
-    } catch (e) {
-        showNotification(`Could not save: ${escapeHtml(e.message)}`, 'error', 5000);
-    }
-}
-
-async function setEphemeralInterval(seconds) {
-    try {
-        await identityRequest('/api/identities/options', { ephemeral_interval: Number(seconds) });
-    } catch (e) {
-        showNotification(`Could not save: ${escapeHtml(e.message)}`, 'error', 5000);
-    }
-}
-
-// 30 -> "30 s", 300 -> "5 min", 3600 -> "1 h", 95 -> "1 min 35 s".
-function formatInterval(seconds) {
-    seconds = Math.max(0, Math.round(seconds));
-    if (seconds < 60) return `${seconds} s`;
-    if (seconds % 3600 === 0) return `${seconds / 3600} h`;
-    const m = Math.floor(seconds / 60), s = seconds % 60;
-    return s ? `${m} min ${s} s` : `${m} min`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -13063,24 +13563,6 @@ document.addEventListener('DOMContentLoaded', () => {
     vanityFetch('/api/vanity').then(vanityApply).catch(() => {});
 });
 
-// Timed ephemeral: the server changes the identity on its own. Read the
-// new state when it is due, so the identity button and settings show the
-// new one. Only that: the page is not reloaded.
-function scheduleEphemeralCheck() {
-    clearTimeout(scheduleEphemeralCheck.timer);
-    const s = identityState;
-    if (!s || s.ephemeral_rotates_in === null || s.ephemeral_rotates_in === undefined) return;
-    scheduleEphemeralCheck.timer = setTimeout(async () => {
-        const before = identityState && identityState.active_identity.identity_hash;
-        await loadIdentityState();
-        const after = identityState && identityState.active_identity.identity_hash;
-        if (before && after && before !== after) {
-            showNotification(`New ephemeral identity: <span class="mono">${escapeHtml(shortAddr(identityState.active_identity.lxmf_address))}</span>`,
-                             'info', 3000);
-        }
-    }, (s.ephemeral_rotates_in + 1.5) * 1000);
-}
-
 async function setBinding(node, profileId) {
     try {
         await identityRequest('/api/identities/bindings', { node, profile_id: profileId || null });
@@ -13150,7 +13632,7 @@ function renderRunningOn() {
         } else {
             html += `<div class="settings-hint">No home network address found.</div>`;
         }
-        // Remote access (System Setup): the tunnel's address, and the DDNS
+        // Remote access (Access & Remote): the tunnel's address, and the DDNS
         // name, which works when the router forwards this port.
         (a.public || []).forEach(p => {
             const note = p.kind === 'DDNS' ? ` <span class="settings-hint" style="display:inline">(${p.ok ? 'updated' : 'not updated yet'}; needs this port forwarded on the router)</span>` : '';
@@ -13535,6 +14017,11 @@ function saveSettings({ close = false } = {}) {
     if (notifications) {
         try { localStorage.setItem(NOTIFICATIONS_KEY, notifications.value); } catch (e) {}
     }
+    const theme = document.getElementById('setting-theme');
+    if (theme) {
+        try { localStorage.setItem(THEME_KEY, theme.value); } catch (e) {}
+        applyTheme();
+    }
     const statusBar = document.getElementById('setting-statusbar');
     if (statusBar) {
         try { localStorage.setItem(STATUSBAR_KEY, statusBar.value); } catch (e) {}
@@ -13598,9 +14085,8 @@ function saveSettings({ close = false } = {}) {
 
     if (close) closeSettings();
     else {
-        // What is in the fields now is the saved state: nothing left to warn about.
-        settingsBaseline = new Map();
-        updateSettingsDirty();
+        // What is in the fields now is the saved state; Apply sections still wait for Apply.
+        forgetSettingsBaseline(field => !!field.closest('[data-apply]'));
     }
     showNotification('Settings saved', 'success', 2500);
 
@@ -14654,40 +15140,42 @@ function showNodeMenu(anchor, hash, name) {
     const cached = nodeCacheSummary[String(hash).toLowerCase()];
     const cachedCount = cached ? cached.count : 0;
     openNodeMenu(anchor, name || hash, hash, [
-        { label: 'Open', run: () => browseNode(hash, name) },
+        { label: 'Open', run: () => browseNode(hash, name), tip: 'Open this node in this tab' },
         { label: 'Open in a new tab', run: () => openQuickAddress(`${hash}:/page/index.mu`, name, true),
-          tip: 'Always a new tab, even if this one is empty' },
+          tip: 'Open this node in a new tab' },
         { label: 'Open in a new tab in background', run: () => openInBackgroundTab(`${hash}:/page/index.mu`, name),
-          tip: 'Loads in a new tab; you stay where you are' },
+          tip: 'Open this node in a new tab, without leaving this one' },
         '-',
-        { label: 'Node info', run: info },
+        { label: 'Node info', run: info, tip: 'Show the details of this node' },
         // The operator's LXMF address, opened straight in a chat to write to it.
         ...(node.operator_lxmf_address ? [{
             label: 'Message the operator (LXMF)',
             disabled: !(typeof messengerEnabled === 'function' && messengerEnabled()),
             run: () => openMessenger(node.operator_lxmf_address),
             tip: (typeof messengerEnabled === 'function' && messengerEnabled())
-                ? `Write to ${node.operator_name || 'the operator'} (${node.operator_lxmf_address.slice(0, 8)}…) in Messages`
+                ? 'Write a message to the operator of this node'
                 : 'Turn on the messenger in Settings > LXMF Messenger' }] : []),
         ...(node.operator_lxmf_address && typeof messengerEnabled === 'function' && messengerEnabled()
             && !(Messenger.conversations || []).some(c => c.peer === node.operator_lxmf_address) ? [{
             label: 'Add the operator to contacts',
             run: () => addContactChecked(node.operator_lxmf_address, node.operator_name || ''),
-            tip: 'Keep the operator in your conversations without writing first' }] : []),
-        { label: 'Copy address', run: () => copyHashToClipboard(hash) },
-        { label: 'Ping', run: () => pingNode(hash, name) },
+            tip: 'Add the operator of this node to your contacts' }] : []),
+        { label: 'Copy address', run: () => copyHashToClipboard(hash), tip: 'Copy the address of this node' },
+        { label: 'Ping', run: () => pingNode(hash, name), tip: 'Check if this node answers' },
         { label: 'Check path', run: () => checkPath(hash, name),
-          tip: 'The path held to this node now: hops, next hop, age, expiry. Nothing is sent' },
+          tip: 'Show the path to this node (hops, next hop), nothing is sent' },
         { label: 'Request a new path', run: () => requestPath(hash, name),
-          tip: 'Forget the path to this node and ask the network for a new one' },
+          tip: 'Ask the network for a new path to this node' },
         '-',
-        { label: isFavorite ? 'Remove from favorites' : 'Add to favorites', run: () => toggleFavorite(hash, name) },
+        { label: isFavorite ? 'Remove from favorites' : 'Add to favorites', run: () => toggleFavorite(hash, name),
+          tip: isFavorite ? 'Remove this node from your favorites' : 'Add this node to your favorites' },
         { label: cachedCount ? `Remove from cache (${cachedCount} page${cachedCount === 1 ? '' : 's'})`
                              : 'Remove from cache',
           disabled: !cachedCount, run: () => removeNodeFromCache(hash, name),
-          tip: cachedCount ? 'Delete the saved pages of this node from disk: the next visit fetches them fresh'
-                           : 'No pages of this node are saved' },
-        { label: 'Hide from the list', danger: true, run: () => hideNode(hash, name) },
+          tip: cachedCount ? 'Delete the saved pages of this node'
+                           : 'No saved pages for this node' },
+        { label: 'Hide from the list', danger: true, run: () => hideNode(hash, name),
+          tip: 'Hide this node from the node list' },
     ]);
 }
 
@@ -14748,37 +15236,38 @@ function showLxmfMenu(anchor, address, name, title = 'Node operator', first = []
     openNodeMenu(anchor, name || title, address, [
         ...first,
         ...(messenger ? [{ label: 'Open messenger', run: () => openMessenger(),
-                           tip: 'Messages, on the list of conversations' }, '-',
+                           tip: 'Open the list of conversations' }, '-',
                          { label: 'Send message' + unread, run: () => openMessenger(address),
-                           tip: 'Open a conversation with this address in Messages' }, '-'] : []),
-        { label: 'Copy LXMF address', run: () => copyOperatorAddress(address) },
+                           tip: 'Open the chat with this address' }, '-'] : []),
+        { label: 'Copy LXMF address', run: () => copyOperatorAddress(address), tip: 'Copy this LXMF address' },
         ...(messenger ? [{ label: 'Send address to…', run: () => sendAddressTo(address, name || ''),
-                           tip: 'Send this address to one of your contacts: name, hash and lxmf:// link in a message' }] : []),
+                           tip: 'Send this address to one of your contacts' }] : []),
         ...(messenger && !conv ? [{ label: 'Add to contacts', run: () => addContactChecked(address, name || ''),
-                                    tip: 'Keep it in your conversations without writing to it first' }] : []),
+                                    tip: 'Add this address to your contacts' }] : []),
         ...(messenger ? [{ label: 'Customize contact', run: () => openAvatarColors(address),
-                           tip: 'Its colour, and the name you give it' },
+                           tip: 'Change the colour and name of this contact' },
                          { label: 'Rename contact', run: () => renameContact(address),
-                           tip: 'A name of your own for this contact, shown instead of the announced one' },
+                           tip: 'Give this contact a name of your own' },
                          isFavoriteContact(address)
-                             ? { label: 'Remove from favourite contacts', run: () => toggleFavoriteContact(address) }
+                             ? { label: 'Remove from favourite contacts', run: () => toggleFavoriteContact(address),
+                                 tip: 'Remove this contact from the favourites' }
                              : { label: 'Add to favourite contacts', run: () => toggleFavoriteContact(address),
-                                 tip: 'Shown first in Messages, above a thin line' }] : []),
+                                 tip: 'Show this contact at the top of Messages' }] : []),
         '-',
         ...(messenger ? [{ label: 'Peer info', run: () => messengerPeerInfo(address),
-                           tip: 'Everything known about this contact: node, path, keys' },
+                           tip: 'Show the details of this contact' },
                          { label: 'Ping', run: () => messengerPing(address),
-                           tip: 'Open a link to this address and time the answer. No message is sent' }] : []),
+                           tip: 'Check if this address answers, no message is sent' }] : []),
         { label: 'Check if reachable', run: () => checkLxmfReachable(address, name),
-          tip: 'One path request: does anything answer on this address?' },
+          tip: 'Ask the network if this address can be reached' },
         ...(messenger ? [
             blocked ? { label: 'Unblock', run: () => messengerUnblock(address),
                         tip: 'Accept messages from this address again' }
                     : { label: 'Block', danger: true, run: () => messengerBlock(address),
-                        tip: 'Drop every message from this address' },
+                        tip: 'Refuse all messages from this address' },
             { label: 'Delete conversation', danger: true, disabled: !conv,
               run: () => messengerDeleteConversation(address),
-              tip: conv ? 'Delete this conversation from this computer' : 'No conversation with this address' },
+              tip: conv ? 'Delete this conversation' : 'No conversation with this address' },
         ] : []),
     ]);
 }
@@ -14966,6 +15455,84 @@ const SPLASH_KEY = 'rbrowser_splash';
 function splashOn() {
     try { return localStorage.getItem(SPLASH_KEY) !== 'off'; } catch (e) { return true; }
 }
+
+// The theme (Settings > System Setup): a file of colours in templates/themes,
+// style.css uses them as var(--c-...). Auto follows the system. The server
+// writes the saved one into the page, so it starts with the right colours.
+const THEME_KEY = 'rbrowser_theme';
+const THEMES = [['dark', 'Dark'], ['light', 'Light'], ['auto', 'Auto (as the system)']];
+
+// A guest's own pick (status bar); none yet = the owner's theme.
+const GUEST_THEME_KEY = 'rbrowser_guest_theme';
+
+function themeChoice() {
+    try {
+        const g = window.rbGuest ? localStorage.getItem(GUEST_THEME_KEY) : null;
+        if (g === 'light' || g === 'dark') return g;
+        const v = localStorage.getItem(THEME_KEY);
+        return THEMES.some(([k]) => k === v) ? v : 'dark';
+    } catch (e) { return 'dark'; }
+}
+
+function shownTheme(choice = themeChoice()) {
+    if (choice !== 'auto') return choice;
+    return window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
+function toggleGuestTheme() {
+    try { localStorage.setItem(GUEST_THEME_KEY, shownTheme() === 'light' ? 'dark' : 'light'); } catch (e) { return; }
+    applyTheme();
+    syncGuestThemeButton();
+}
+
+function syncGuestThemeButton() {
+    const btn = document.getElementById('sb-guest-theme');
+    if (!btn) return;
+    const light = shownTheme() === 'light';
+    btn.textContent = light ? '☾' : '☀';
+    btn.title = light ? 'Dark theme (only in this browser)' : 'Light theme (only in this browser)';
+}
+
+function applyTheme() {
+    const shown = shownTheme();
+    const link = document.getElementById('theme-css');
+    if (link && link.getAttribute('href') !== `/themes/${shown}.css`) link.setAttribute('href', `/themes/${shown}.css`);
+    const bg = document.getElementById('theme-bg');
+    if (bg) bg.textContent = `html, body { background: ${shown === 'light' ? '#ffffff' : '#0d1117'}; }`;
+    const meta = document.querySelector('meta[name="color-scheme"]');
+    if (meta) meta.setAttribute('content', shown === 'light' ? 'only light' : 'dark');
+    document.documentElement.dataset.theme = shown;
+    // NomadNet pages as NomadNet draws them in its light theme: the parser's
+    // own styles; the open pages drawn again (the others when shown).
+    if (isOriginalParser && window.MicronParser && micronParser && micronParser.darkTheme !== (shown !== 'light')) {
+        const touch = micronParserLight === micronParser;
+        micronParser = new window.MicronParser(shown !== 'light', !touch);
+        micronParserLight = touch ? micronParser : new window.MicronParser(shown !== 'light', false);
+        (typeof tabs !== 'undefined' ? tabs : []).forEach(t => { if (t.currentRawContent) t.themeStale = true; });
+        const tab = getActiveTab();
+        if (tab) redrawPageTab(tab);
+    }
+}
+
+// A page drawn again from what was loaded (theme change), as the view toggle does.
+function redrawPageTab(tab) {
+    if (!tab || !tab.themeStale) return;
+    tab.themeStale = false;
+    if (tab.isRawView || !tab.currentRawContent) return;
+    const content = document.querySelector(`#${tab.id} .page-content`);
+    if (!content) return;
+    content.innerHTML = parseMicronContent(tab.currentRawContent);
+    applyPageColors(content, tab.currentRawContent);
+    addClickHandlersToCurrentTab(tab);
+    hydrateMicronMedia(tab);
+    refitPageZoom();
+}
+
+try {
+    window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+        if (themeChoice() === 'auto') applyTheme();
+    });
+} catch (e) { /* old browser: Auto is read at start only */ }
 
 function applyStatusBarPos(pos) {
     document.body.classList.toggle('sb-bottom', pos === 'bottom');

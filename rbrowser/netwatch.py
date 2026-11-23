@@ -173,6 +173,7 @@ class NetWatch:
         self.fails = 0
         self.last_check: Optional[float] = None     # when the last round really ran
         self.last_ok: Optional[bool] = None         # and whether something answered
+        self.last_ms: Optional[int] = None          # how long that round took
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._wake = threading.Event()
@@ -268,7 +269,9 @@ class NetWatch:
                 return self.state
             hosts = list(self.time_servers if self.method == "ntp" else self.hosts)
             probe = self.probe or (time_server_answers if self.method == "ntp" else reachable)
+        started = time.monotonic()
         ok = probe(hosts)
+        self.last_ms = round((time.monotonic() - started) * 1000)   # rB2 Monitor
         now = self.clock()
         changed = None
         with self._lock:

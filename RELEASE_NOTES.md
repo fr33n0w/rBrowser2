@@ -3,6 +3,43 @@
 Everything that changed in each version, in full. The short list is in
 [CHANGELOG.md](CHANGELOG.md).
 
+## 2.0.7b
+
+### New
+
+- **Radio tab** - Settings > System Setup, off by default: listen to [radio-lxst](https://github.com/fr33n0w/radio-lxst) stations over Reticulum. Stations from their announces (favourites first) or a Call ID typed in, Next and Random, track bar or the live stream's title, quality changed while listening, volume and VU meter. The sound plays on the device you are using (phone, tunnel too), nothing new to install. The station sees the identity picked in the tab's bar and its name; the Commands pane sends the station's commands (help, info, status, link, subscribe, unsubscribe) through the Messenger. A station not found is tried again; station state is asked while the tab is open.
+- **rB2 Monitor** - Settings > System Setup, off by default: a MON tab with everything rBrowser is doing on one live page (system, network, Reticulum and interfaces, identities, announces, LXMF, RRC, BBS, NomadNet, RMAP, log), in the style of an old terminal, with 7 colour themes and an optional CRT effect. Owner only.
+- **Light theme** - Settings > System Setup > Theme: Dark, Light or Auto.
+- **RRC** - Micron colours and art (thanks mmoyles87), Markdown as in NomadNet, ASCII fonts and decorations, colours shown the same in NomadNet, a delivery check with Retry for messages the hub did not echo.
+- **Stickers in RRC** - packs downloaded from their official sources (OpenMoji, Twemoji, Fluent Emoji 3D), a Recent tab and big previews; Telegram sticker sets with a bot of your own. A sticker travels as its emoji: other clients show the emoji.
+- **Guest mode, much more** - each guest gets an identity of its own, used in NomadNet, BBS, RRC, LXMF and Radio and thrown away when it leaves (thanks dr4kk4r); one switch per client, switches for your favorites and history, a fixed RRC hub for guests, Guests online with Kick, Ban and Close all, max guests, sessions kept across a restart, access log and actions log (LXMF text optional), guests told at once when access closes, their own light/dark switch.
+- **Access from the terminal** - `--set-password` and `--guest-setup`, with rBrowser stopped.
+- **Log out** in the status bar.
+- **Saved identities** show each identity's hash and where it is used.
+- **Settings** remind you of unsaved changes.
+- **Link stamps** - NomadNet 1.5.1 nodes that ask a link stamp now open: rBrowser computes it on all CPU cores, waits up to 5 minutes and says so in the page header.
+- **Tooltips** on every menu item, and faster everywhere.
+- A notice when the main rBrowser stops or restarts, on every page opened from another device.
+
+### Changed
+
+- Node links close with their tab.
+- New NomadNet top bar icons.
+
+### Removed
+
+- The ephemeral identity.
+
+### Fixed
+
+- NomadNet pages shown all in bold: now normal text, bold only where the page asks.
+- RRC bold text, and mentions inside reply quotes.
+- Outline emoji on Windows.
+- Guests could read some owner settings (terminal log, server and remote settings, vanity keys): now refused by the server.
+- Switching guest mode off left Apply pending.
+- Settings showing unsaved changes that were not there; the splash screen switch did not move.
+- Update now could stay on "Compressing objects 100%" on Windows when an update changes many files (git waited on a full pipe). The files were updated: a restart by hand finished it. Fixed for the updates after this one.
+
 ## 2.0.6b
 
 ### New

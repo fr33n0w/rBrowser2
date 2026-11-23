@@ -298,6 +298,10 @@ def _status(url: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _say(text: str) -> None:
+    print(f"[{time.strftime('%H:%M:%S')}] {text}", flush=True)
+
+
 def _wait_for_server(url: str, seconds: float = 20.0) -> None:
     end = time.time() + seconds
     while time.time() < end:
@@ -541,18 +545,23 @@ def run_window(argv) -> int:
         while not state["closing"]:
             time.sleep(2)
             if args.parent and not psutil.pid_exists(args.parent):
+                _say("Server process gone: closing the window")
                 quit_all()
                 return
             status = _status(args.url)
             if status is None:
                 misses += 1
-                if misses >= 15:
+                # A live parent is a busy server, not a dead one: closing the
+                # window would shut it down.
+                if misses >= 15 and not args.parent:
+                    _say("Server not answering: closing the window")
                     quit_all()
                     return
                 continue
             misses = 0
             now = status.get("instance")
             if first is not None and now is not None and now != first:
+                _say("Another rBrowser answers on this port: closing the window")
                 quit_all()
                 return
 
@@ -565,6 +574,13 @@ def run_window(argv) -> int:
             icon = None
             main.events.minimized -= on_minimized
     threading.Thread(target=watch_server, name="rbrowser-window-watch", daemon=True).start()
-    webview.start(private_mode=False, storage_path=STORAGE, icon=_icon_file())
+    try:
+        webview.start(private_mode=False, storage_path=STORAGE, icon=_icon_file())
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        raise
+    finally:
+        _say("Window closed")
     quit_all()
     return 0

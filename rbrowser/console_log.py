@@ -7,7 +7,6 @@ chosen in Settings > Notifications and log (no restart):
   errors      errors and warnings                          on by default
   connection  Reticulum connection, restarts               on by default
   identity    switching to another identity                on by default
-  ephemeral   every new ephemeral identity, "kept as"      off
   announces   one line per NomadNet announce               off
   messenger   LXMF: messages in and out, announces, start  on by default
   propagation LXMF propagation nodes heard and chosen,     off
@@ -43,10 +42,10 @@ import time
 from collections import deque
 from typing import Any, Dict, Iterable, Optional
 
-CATEGORIES = ("errors", "connection", "identity", "ephemeral", "announces", "messenger",
+CATEGORIES = ("errors", "connection", "identity", "announces", "messenger",
               "propagation", "rrc", "bbs", "rmap", "activity")
 DEFAULTS = {"errors": True, "connection": True, "identity": True,
-            "ephemeral": False, "announces": False, "messenger": True,
+            "announces": False, "messenger": True,
             "propagation": False, "rrc": False, "bbs": False, "rmap": False,
             "activity": False}
 PRESETS = {
@@ -62,8 +61,6 @@ def category_of(line: str) -> str:
     text = line.lstrip()
     if text.startswith(("❌", "⚠️", "⚠")):
         return "errors"
-    if text.startswith(("🎭", "💾 Ephemeral")):
-        return "ephemeral"
     if text.startswith("🔑"):
         return "identity"
     if text.startswith("🌐 NomadNet Announce"):

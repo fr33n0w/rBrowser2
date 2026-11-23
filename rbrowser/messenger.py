@@ -10,10 +10,8 @@ Identity
 --------
 LXMF knows you by an identity, and an LXMF address is that identity's
 "lxmf.delivery" destination. The messenger uses a saved profile (the same
-list as the browser's, chosen separately here) or, when allowed in Advanced,
-the ephemeral identity - which changes at restart, reload or on a timer, and
-replies sent to it after a change are lost. The messenger follows whichever
-identity it should be on, once a second.
+list as the browser's, chosen separately here). The messenger follows
+whichever identity it should be on, once a second.
 
 One LXMRouter carries one delivery identity, and a router can only be
 created on the main thread (it installs signal handlers), so there is one
@@ -23,17 +21,16 @@ the old delivery destination is deregistered, the new one registered.
 Announces
 ---------
 Through LXMRouter.announce(), so the app data is LXMF's own. Automatic ones
-(at start, and every N minutes, never under 20 - our limit, not RNS's) are
-for saved profiles only: an ephemeral identity that announced at every
-change would only be noise. It can be announced by hand.
+(at start, and every N minutes, never under 20 - our limit, not RNS's).
+Announce sends one by hand.
 
 Stamps asked of senders
 -----------------------
 As NomadNet's required_stamp_cost: a cost set in Settings goes in our
 announce (LXMF's app data), senders' LXMF computes the stamp, and with
 enforce_stamps on LXMF drops messages without a valid one. Whoever we write
-to gets a ticket (include_ticket) and can answer without a stamp. Saved
-identities only; changing the cost announces at once.
+to gets a ticket (include_ticket) and can answer without a stamp. Changing
+the cost announces at once.
 
 Files
 -----
@@ -43,8 +40,7 @@ bigger than a packet goes as an RNS Resource over the link - split,
 compressed and put back together by RNS, as NomadNet downloads are. At most
 10 MB and 10 files a message. Received files land in downloads/<contact>/
 with their own names; our own sent files are kept as a copy (for the chat
-and Retry) in settings/messenger/files/. The ephemeral identity keeps both
-in memory only. Voice messages (FIELD_AUDIO): Opus/Ogg kept as it is, Codec2
+and Retry) in settings/messenger/files/. Voice messages (FIELD_AUDIO): Opus/Ogg kept as it is, Codec2
 made into a WAV (pycodec2 or ffmpeg); both play in the chat.
 
 Storage
@@ -56,12 +52,10 @@ Storage
     downloads/<contact>/<file name>                                   received files
 
 One JSON file per conversation, written to a temporary file and renamed.
-Conversations of the ephemeral identity are kept in memory only.
 
 Limits of our own
 -----------------
-One recipient per message, nothing sent to lists. With the ephemeral
-identity at most one message every 10 s and 20 an hour.
+One recipient per message, nothing sent to lists.
 
 Propagation nodes
 -----------------
@@ -75,19 +69,33 @@ the nearest active one heard (propagation.py) or one chosen in Settings.
 
 from __future__ import annotations
 
-import atexit
+import contextvars
 import json
 import os
 import re
 import threading
 import time
-from collections import deque
 from typing import Any, Dict, List, Optional
 
 import RNS
 from . import rnsquiet
 
-from .identities import DEFAULT_ID, EPHEMERAL
+from .identities import DEFAULT_ID
+
+# Guest mode: the guest identity listens too, and a guest's requests see only it.
+GUEST_ID = "guest"
+GUEST_NAME = "Guest"
+_GUEST_VIEW = contextvars.ContextVar("lxmf_guest_view", default=False)
+
+
+def set_guest_view(on: bool) -> None:
+    """Set at the start of every request (routes.py): a guest session or not."""
+    _GUEST_VIEW.set(bool(on))
+
+
+def guest_view() -> bool:
+    """Is the request being served a guest's?"""
+    return _GUEST_VIEW.get()
 
 SETTINGS_FILE = os.path.join("settings", "messenger.json")
 STORE_DIR = os.path.join("settings", "messenger")
@@ -101,10 +109,10 @@ MANUAL_ANNOUNCE_GAP = 60                # the Announce button, at most once a mi
 
 MAX_CONTENT = 16 * 1024
 MAX_TITLE = 200
-EPHEMERAL_GAP = 10                      # seconds between two messages
-EPHEMERAL_PER_HOUR = 20
 IDENTITY_WAIT = 30                      # asking the network for an unknown recipient
-PATH_WAIT = 20                          # asking the network for a path before a direct send
+PATH_WAIT = 20                          # a fresh path, after a failed direct send
+SEND_RETRIES_DEFAULT = 5                # tries again after a failed send (MeshChat: 6)
+SEND_RETRIES_MAX = 10
 
 PROPAGATION_MODES = ("auto", "manual", "off")
 SYNC_DEFAULT_MINUTES = 360              # NomadNet's lxmf_sync_interval
@@ -165,11 +173,6 @@ def clean_nickname(value: Any) -> str:
 
 def clean_display_name(value: Any) -> str:
     return " ".join(str(value or "").split())[:64]
-
-
-def ephemeral_default_name(address: str) -> str:
-    """The name of an ephemeral identity nobody renamed: eph_ + 4 hex."""
-    return f"eph_{address[:4]}" if address else ""
 
 
 def clean_reaction(value: Any) -> Optional[str]:
@@ -257,8 +260,8 @@ def _atomic_write(path: str, data: Any) -> None:
 
 class Conversations:
     """
-    The conversations of one identity. On disk for a saved profile, in
-    memory for the ephemeral one.
+    The conversations of one identity. on_disk=False keeps them in memory
+    only (tests).
     """
 
     def __init__(self, identity_hash: str, on_disk: bool) -> None:
@@ -266,9 +269,10 @@ class Conversations:
         self.on_disk = on_disk
         self.dir = os.path.join(STORE_DIR, "conversations", identity_hash)
         # Attachments: <files_dir>/<peer>/<local_id>-<n>, the name and type
-        # in the message's "files". In memory for the ephemeral identity.
+        # in the message's "files".
         self.files_dir = os.path.join(STORE_DIR, "files", identity_hash)
         self.memory_files: Dict[str, bytes] = {}
+        self.downloads_sub = ""             # a folder of downloads/ for this identity ("" = top)
         self.lock = threading.RLock()
         self.data: Dict[str, Dict[str, Any]] = {}
         if on_disk:
@@ -295,18 +299,6 @@ class Conversations:
                 return handle.read()
         except OSError:
             return None
-
-    def persist(self) -> None:
-        """From memory to disk: the ephemeral identity kept as a profile."""
-        with self.lock:
-            self.on_disk = True
-            for key, data in list(self.memory_files.items()):
-                peer, name = key.split("/", 1)
-                local_id, _, index = name.rpartition("-")
-                self.put_file(peer, local_id, int(index), data)
-            self.memory_files.clear()
-            for peer in list(self.data):
-                self._save(peer)
 
     def _drop_files(self, peer: str) -> None:
         for key in [k for k in self.memory_files if k.startswith(peer + "/")]:
@@ -480,19 +472,36 @@ class Conversations:
 
 
 class Listener:
-    """One identity the messenger listens on: every saved one at once, and
-    the ephemeral one while it is the identity chosen. The one chosen in
-    "Write as" is only the one we write with and look at."""
+    """One identity the messenger listens on: every saved one at once. The
+    one chosen in "Write as" is only the one we write with and look at."""
 
-    def __init__(self, profile_id: str, identity: Any, destination: Any, store: "Conversations",
-                 ephemeral: bool, ratchet: Optional[str] = None) -> None:
+    def __init__(self, profile_id: str, identity: Any, destination: Any, store: "Conversations") -> None:
         self.id = profile_id
         self.identity = identity
         self.destination = destination
         self.store = store
-        self.ephemeral = ephemeral
-        self.ratchet = ratchet
         self.address = destination.hash.hex()
+        self.gid = ""                      # the guest session it belongs to
+        self.announce_at = 0.0              # guests: its last announce
+
+    @property
+    def is_guest(self) -> bool:
+        return self.id == GUEST_ID
+
+
+def _viewed(attr: str) -> property:
+    """The identity in use: the owner's, or the guest's in a guest request."""
+    def get(self: "Messenger") -> Any:
+        if _GUEST_VIEW.get():
+            guest = self.guest_listener()
+            if guest is None:
+                return None
+            return guest.identity.hash.hex() if attr == "identity_hash" else getattr(guest, attr)
+        return getattr(self, "_own_" + attr)
+
+    def put(self: "Messenger", value: Any) -> None:
+        setattr(self, "_own_" + attr, value)
+    return property(get, put)
 
 
 class _DeliveryDestinations(dict):
@@ -511,29 +520,25 @@ class _DeliveryDestinations(dict):
 class Messenger:
     """The LXMF client. See the module docstring."""
 
+    destination = _viewed("destination")
+    identity = _viewed("identity")
+    identity_hash = _viewed("identity_hash")
+    store = _viewed("store")
+
     DEFAULTS: Dict[str, Any] = {
         # Off for a new user, who switches it on after setting it up. Then
         # no announce at start: the periodic one comes after an hour, time
         # enough to choose a name (else it goes unnamed, as other clients do).
         "enabled": False,
-        "identity": DEFAULT_ID,          # a profile id, or "ephemeral"
-        # The saved profile last chosen here: where the messenger goes back
-        # to when ephemeral messages are switched off, never silently to
-        # another identity.
-        "fixed_identity": DEFAULT_ID,
+        "identity": DEFAULT_ID,          # a profile id
         # Old single name, kept only to move it to display_names; the page
         # still sends "display_name" for the identity chosen in Settings.
         "display_name": "",
-        # Name in announces, one per identity: {profile id: name}, and for
-        # the ephemeral identity {"ephemeral:<lxmf address>": name} (it
-        # changes, so does the key). Ephemeral without one: eph_<4 hex>.
+        # Name in announces, one per identity: {profile id: name}.
         "display_names": {},
         "announce_at_start": False,
         "announce_periodic": True,
         "announce_minutes": ANNOUNCE_DEFAULT_MINUTES,
-        # Settings > Advanced, unlocked by tapping the version seven times.
-        "advanced_unlocked": False,
-        "allow_ephemeral": False,
         # LXMF addresses whose messages are dropped: {address: {"name", "at"}}.
         # Applied with LXMRouter.ignore_destination, LXMF's own ignore list.
         "blocked": {},
@@ -583,9 +588,9 @@ class Messenger:
         "autosend_files": False,
         # Images shown in the chat; off, they are listed like any other file.
         "image_previews": True,
-        # Short messages in one packet, no link first (LXMF OPPORTUNISTIC);
-        # LXMF itself goes by link when it does not fit, and for files.
-        "opportunistic": False,
+        # A message LXMF could not deliver is tried again this many times
+        # (a fresh path each time), then left on the propagation node.
+        "send_retries": SEND_RETRIES_DEFAULT,
         # Every saved identity sees the contacts of the others too (the
         # messages stay with the identity they belong to).
         "share_contacts": False,
@@ -610,10 +615,7 @@ class Messenger:
         self.router = None
         self.destination = None
         self.identity_hash: Optional[str] = None
-        self.using_ephemeral = False
-        self.ephemeral_ratchet: Optional[str] = None
         self.store: Optional[Conversations] = None
-        self.ephemeral_store: Optional[Conversations] = None
         self.last_announce = 0.0
         self.listening_since = 0.0
         self.announced_at_start = False
@@ -622,8 +624,6 @@ class Messenger:
         self.incoming_seq = 0
         self.last_incoming: Optional[Dict[str, Any]] = None
         self.error: Optional[str] = None
-        self._sent_times: deque = deque()
-        self._last_sent = 0.0
         self._watcher_started = False
         self.identity: Optional[RNS.Identity] = None
         from .propagation import PropagationNodes
@@ -642,6 +642,9 @@ class Messenger:
         self._cancelled: set = set()
         # Every identity listening, by LXMF address (see Listener).
         self.listeners: Dict[str, Listener] = {}
+        # The last message received by each identity (the guest gets only its own).
+        self.last_incoming_for: Dict[str, Dict[str, Any]] = {}
+        self.on_guest_message = None        # (gid, peer, text, files): the guest log
         # A sync goes through the saved identities one after the other.
         self._sync_queue: List[Any] = []
         self._sync_all: List[Any] = []
@@ -671,7 +674,7 @@ class Messenger:
 
     def _repair(self) -> None:
         s = self.settings
-        for key in ("enabled", "announce_at_start", "announce_periodic", "advanced_unlocked", "allow_ephemeral", "offline"):
+        for key in ("enabled", "announce_at_start", "announce_periodic", "offline"):
             s[key] = bool(s.get(key))
         try:
             s["announce_minutes"] = max(ANNOUNCE_MIN_MINUTES, int(s.get("announce_minutes")))
@@ -686,19 +689,13 @@ class Messenger:
         colors = s.get("colors") if isinstance(s.get("colors"), dict) else {}
         s["colors"] = {a: int(h) % 360 for a, h in colors.items()
                        if clean_address(a) == a and isinstance(h, (int, float)) and not isinstance(h, bool)}
-        if not s["advanced_unlocked"]:
-            s["allow_ephemeral"] = False
-        if not isinstance(s.get("fixed_identity"), str) or s["fixed_identity"] == EPHEMERAL:
-            s["fixed_identity"] = DEFAULT_ID
-        if not isinstance(s.get("identity"), str):
-            s["identity"] = s["fixed_identity"]
-        if s["identity"] == EPHEMERAL and not s["allow_ephemeral"]:
-            s["identity"] = s["fixed_identity"]
-        if s["identity"] != EPHEMERAL:
-            s["fixed_identity"] = s["identity"]
+        # Settings of a version with the ephemeral identity: back to a saved one.
+        if not isinstance(s.get("identity"), str) or s["identity"] in ("ephemeral", GUEST_ID):
+            s["identity"] = DEFAULT_ID
+        s["display_names"] = {k: v for k, v in s["display_names"].items() if not k.startswith("ephemeral:")}
         # From the single name of before: it goes to the identity it was used with.
         if s["display_name"] and not s["display_names"]:
-            s["display_names"][s["fixed_identity"]] = s["display_name"]
+            s["display_names"][s["identity"]] = s["display_name"]
         s["display_name"] = ""
         if s.get("propagation_mode") not in PROPAGATION_MODES:
             s["propagation_mode"] = "auto"
@@ -732,7 +729,10 @@ class Messenger:
         s["autosend_files"] = bool(s.get("autosend_files", False))
         s["image_previews"] = bool(s.get("image_previews", True))
         from . import autoreply as ar
-        s["opportunistic"] = bool(s.get("opportunistic"))
+        try:
+            s["send_retries"] = min(SEND_RETRIES_MAX, max(1, int(s.get("send_retries"))))
+        except (TypeError, ValueError):
+            s["send_retries"] = SEND_RETRIES_DEFAULT
         s["share_contacts"] = bool(s.get("share_contacts"))
         s["autoreply_on"] = bool(s.get("autoreply_on"))
         s["echo_on"] = bool(s.get("echo_on"))
@@ -777,12 +777,10 @@ class Messenger:
                 wanted["away_since"] = time.time()
             if wanted.get("propagation_mode") == "manual" and not clean_address(wanted.get("propagation_node")):
                 raise ValueError("Pick a propagation node, or paste its address (32 hex characters)")
-            if "identity" in incoming and incoming["identity"] != EPHEMERAL:
-                if self.browser.identities.identity_for(str(incoming["identity"])) is None:
+            if "identity" in incoming:
+                chosen = str(incoming["identity"])
+                if chosen == GUEST_ID or self.browser.identities.identity_for(chosen) is None:
                     raise ValueError("No such identity")
-            if incoming.get("identity") == EPHEMERAL and not (wanted.get("advanced_unlocked")
-                                                               and wanted.get("allow_ephemeral")):
-                raise ValueError("Ephemeral identity messages are not allowed (Settings > Advanced)")
             old_offline = self.settings.get("offline")
             old_cost = self.settings.get("stamp_cost")
             old_name = self.current_display_name()
@@ -790,7 +788,7 @@ class Messenger:
             self.settings = wanted
             self._repair()
             # Settings sends the name of the identity chosen there.
-            if "display_name" in incoming:
+            if "display_name" in incoming and self.settings["identity"] != GUEST_ID:
                 self._store_display_name(self.settings["identity"], incoming["display_name"])
             self._save_settings()
             if self.router is not None and self.destination is not None:
@@ -799,12 +797,12 @@ class Messenger:
                     self.destination.display_name = self.current_display_name() or None
                     # The name travels in announces only: a new one goes out now
                     # (a new stamp cost announces below anyway).
-                    if (old_name != self.current_display_name() and not self.using_ephemeral
+                    if (old_name != self.current_display_name()
                             and old_cost == self.settings["stamp_cost"]):
                         self._announce()
                 self._apply_stamps()
                 # Senders learn the cost from our announce: tell them now.
-                if old_cost != self.settings["stamp_cost"] and not self.using_ephemeral:
+                if old_cost != self.settings["stamp_cost"]:
                     self._announce()
             self._apply_propagation()
             if old_offline != self.settings["offline"]:
@@ -838,8 +836,7 @@ class Messenger:
                         self.router.ignore_destination(bytes.fromhex(address))
                     self._apply_stamps()
                     self.error = None
-                    self._clean_ephemeral_ratchets()
-                    atexit.register(self._at_exit)
+                    self._clean_stale_ratchets()
                     self.pn.register()
                     self.peers.register()
                     self._apply_propagation()
@@ -853,10 +850,9 @@ class Messenger:
             self._watcher_started = True
             threading.Thread(target=self._watch, name="messenger", daemon=True).start()
 
-    def _clean_ephemeral_ratchets(self) -> None:
-        """Ratchet files LXMF keeps per delivery destination. Only saved
-        profiles may leave one behind: anything else is from an ephemeral
-        identity of an earlier run that did not end cleanly."""
+    def _clean_stale_ratchets(self) -> None:
+        """Ratchet files LXMF keeps per delivery destination: only those of
+        saved profiles are kept (others are of deleted identities)."""
         try:
             ids = self.browser.identities
             keep = set()
@@ -864,22 +860,14 @@ class Messenger:
                 identity = ids.identity_for(profile["id"])
                 if identity is not None:
                     keep.add(RNS.Destination.hash(identity, "lxmf", "delivery").hex())
+            for _gid, guest in self._guest_wanted():
+                keep.add(RNS.Destination.hash(guest, "lxmf", "delivery").hex())
             folder = self.router.ratchetpath
             for name in os.listdir(folder) if os.path.isdir(folder) else []:
                 if name.endswith(".ratchets") and name[:-9] not in keep:
                     os.remove(os.path.join(folder, name))
         except Exception as exc:
-            print(f"⚠️ Could not clean old ephemeral ratchets: {exc}")
-
-    def _at_exit(self) -> None:
-        paths = {l.ratchet for l in self.listeners.values() if l.ratchet}
-        if self.ephemeral_ratchet:
-            paths.add(self.ephemeral_ratchet)
-        for path in paths:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+            print(f"⚠️ Could not clean old ratchets: {exc}")
 
     def request_start(self) -> None:
         tasks = getattr(self.browser, "main_thread_tasks", None)
@@ -900,47 +888,93 @@ class Messenger:
         print("💬 LXMF messenger off: nothing listens on the LXMF addresses any more")
 
     def _wanted_listeners(self) -> Dict[str, Any]:
-        """{lxmf address: (profile id, identity, ephemeral)}: every saved
-        identity, and the ephemeral one only while it is the one chosen."""
+        """{lxmf address: (profile id, identity)}: every saved identity."""
         ids = self.browser.identities
         wanted: Dict[str, Any] = {}
         for profile in ids.state.get("profiles", []):
             identity = ids.identity_for(profile["id"])
             if identity is not None:
-                wanted[RNS.Destination.hash(identity, "lxmf", "delivery").hex()] = (profile["id"], identity, False)
-        if self.settings["identity"] == EPHEMERAL and self.settings["allow_ephemeral"]:
-            identity = ids.identity_for(EPHEMERAL)
-            if identity is not None:
-                wanted[RNS.Destination.hash(identity, "lxmf", "delivery").hex()] = (EPHEMERAL, identity, True)
+                wanted[RNS.Destination.hash(identity, "lxmf", "delivery").hex()] = (profile["id"], identity)
+        for _gid, guest in self._guest_wanted():
+            wanted.setdefault(RNS.Destination.hash(guest, "lxmf", "delivery").hex(), (GUEST_ID, guest))
         return wanted
 
-    def _add_listener(self, profile_id: str, identity: Any, ephemeral: bool) -> Optional[Listener]:
+    def _guest_wanted(self) -> List[Any]:
+        """[(gid, identity)] of the guest sessions with their stamp in, while guests may use the messenger."""
+        auth = getattr(self.browser, "auth", None)
+        keys = getattr(self.browser, "guest_identity", None)
+        try:
+            if auth is None or keys is None or not auth.guest_on() or not auth.guest_rights().get("messenger"):
+                return []
+            return [(e.gid, e.identity) for e in keys.list() if e.ready and not e.no_lxmf]
+        except Exception as exc:
+            print(f"⚠️ Guest identity for LXMF: {exc}")
+            return []
+
+    def _gid_of(self, identity: Any) -> str:
+        keys = getattr(self.browser, "guest_identity", None)
+        for entry in keys.list() if keys is not None else []:
+            if entry.identity is identity:
+                return entry.gid
+        return ""
+
+    def guest_listener(self, gid: Optional[str] = None) -> Optional[Listener]:
+        """The listener of a guest session (None = the one of the request)."""
+        from .guest_identity import current
+        gid = current() if gid is None else gid
+        if not gid:
+            return None
+        return next((l for l in list(self.listeners.values()) if l.is_guest and l.gid == gid), None)
+
+    def _guest_listeners(self) -> List[Listener]:
+        return [l for l in list(self.listeners.values()) if l.is_guest]
+
+    def _owner_listeners(self) -> List[Listener]:
+        return [l for l in list(self.listeners.values()) if getattr(l, "id", None) != GUEST_ID]
+
+    def _add_listener(self, profile_id: str, identity: Any) -> Optional[Listener]:
         table = self.router.delivery_destinations
         if isinstance(table, _DeliveryDestinations):
             table.registering = True
         try:
             destination = self.router.register_delivery_identity(
                 identity, display_name=self.display_name_of(profile_id) or None,
-                stamp_cost=None if ephemeral else (self.settings["stamp_cost"] or None))
+                stamp_cost=self.settings["stamp_cost"] or None)
         finally:
             if isinstance(table, _DeliveryDestinations):
                 table.registering = False
         if destination is None:
             return None
-        ratchet = None
-        if ephemeral:
-            self._hold_ephemeral_announces(destination)
-            ratchet = os.path.join(self.router.ratchetpath, RNS.hexrep(destination.hash, delimit=False) + ".ratchets")
-            store = Conversations(identity.hash.hex(), on_disk=False)
-        else:
-            store = Conversations(identity.hash.hex(), on_disk=True)
-        listener = Listener(profile_id, identity, destination, store, ephemeral, ratchet)
+        guest = profile_id == GUEST_ID
+        # A guest's chats and files live in memory only: gone with its session.
+        store = Conversations(identity.hash.hex(), on_disk=not guest)
+        listener = Listener(profile_id, identity, destination, store)
+        if guest:
+            listener.gid = self._gid_of(identity)
+            keys = getattr(self.browser, "guest_identity", None)
+            entry = keys.entry(listener.gid) if keys is not None else None
+            if entry is not None:
+                from .guest_resume import restore_chats
+                restore_chats(entry, store)
+            destination.display_name = self.guest_display_name(listener.gid) or None
         self.listeners[listener.address] = listener
         print(f"💬 Messenger listening on {RNS.prettyhexrep(destination.hash)}"
-              f" ({'ephemeral' if ephemeral else self.browser.identities.name_of(profile_id)})")
+              f" ({self._identity_label(listener)})")
         if self.settings["offline"]:
             self._apply_offline()
+        elif listener.is_guest:
+            # Announced at once: nobody can answer a guest whose keys were never heard.
+            self._announce_guest(listener)
         return listener
+
+    def _announce_guest(self, listener: Listener) -> None:
+        try:
+            self.router.announce(listener.destination.hash)
+            listener.announce_at = time.time()
+            self.revision += 1
+            print(f"📣 LXMF announce sent for {RNS.prettyhexrep(listener.destination.hash)} (guest)")
+        except Exception as exc:
+            print(f"⚠️ Guest announce: {exc}")
 
     def _apply_offline(self, announce: bool = False) -> None:
         """Offline: every LXMF destination off the transport (links closed,
@@ -961,8 +995,7 @@ class Messenger:
             except Exception as exc:
                 print(f"⚠️ Offline/online {RNS.prettyhexrep(destination.hash)}: {exc}")
         print(f"💬 Messenger {'offline: not listening' if offline else 'back online'}")
-        if announce and not offline and self.router is not None and self.destination is not None \
-                and not self.using_ephemeral:
+        if announce and not offline and self.router is not None and self.destination is not None:
             # A few seconds after, once the destinations are back on the
             # transport, and every identity listening, not only the one in
             # use: right after "online" peers could not reach us.
@@ -1009,12 +1042,6 @@ class Messenger:
             print(f"⚠️ Could not deregister the LXMF destination: {exc}")
         if self.router is not None:
             self.router.delivery_destinations.pop(destination.hash, None)
-        # An ephemeral identity leaves nothing behind on disk.
-        if listener.ratchet:
-            try:
-                os.remove(listener.ratchet)
-            except OSError:
-                pass
         if self.destination is destination:
             self._set_active(None)
 
@@ -1024,9 +1051,6 @@ class Messenger:
         self.identity = listener.identity if listener else None
         self.identity_hash = listener.identity.hash.hex() if listener else None
         self.store = listener.store if listener else None
-        self.using_ephemeral = bool(listener and listener.ephemeral)
-        self.ephemeral_store = listener.store if listener and listener.ephemeral else None
-        self.ephemeral_ratchet = listener.ratchet if listener else None
 
     def _sync_identity(self) -> None:
         if self.router is None or not self.settings["enabled"]:
@@ -1036,10 +1060,10 @@ class Messenger:
         for address in [a for a in self.listeners if a not in wanted]:
             self._drop_listener(address)
             changed = True
-        for address, (profile_id, identity, ephemeral) in wanted.items():
+        for address, (profile_id, identity) in wanted.items():
             listener = self.listeners.get(address)
             if listener is None:
-                if self._add_listener(profile_id, identity, ephemeral) is not None:
+                if self._add_listener(profile_id, identity) is not None:
                     changed = True
             elif listener.id != profile_id:
                 listener.id = profile_id
@@ -1058,9 +1082,8 @@ class Messenger:
                 # does not announce it (only Announce, and the timer, do).
                 self.listening_since = time.time()
                 changed = True
-                print(f"💬 Writing as {RNS.prettyhexrep(chosen.destination.hash)}"
-                      f"{' (ephemeral)' if chosen.ephemeral else ''}")
-                if (not chosen.ephemeral and self.settings["announce_at_start"]
+                print(f"💬 Writing as {RNS.prettyhexrep(chosen.destination.hash)}")
+                if (self.settings["announce_at_start"]
                         and not self.settings["offline"] and not self.announced_at_start):
                     self.announced_at_start = True
                     self._announce()
@@ -1068,42 +1091,8 @@ class Messenger:
         if changed:
             self.revision += 1
 
-    def _hold_ephemeral_announces(self, destination: Any) -> None:
-        """Connected to a shared instance, RNS hands every destination to
-        rnsd as soon as it is registered, and all of them again when rnsd
-        comes back (announce with path_response=True, no interface). rnsd
-        keeps it to answer path requests from the network - without it
-        nobody finds the address - and does not send it on to the network;
-        it does show it to every other program on this computer, as an
-        announce. Saved identities keep that, as in every LXMF client. An
-        ephemeral one on a timer would show a new address every few minutes,
-        so it is held back until the identity writes (_expose_ephemeral)."""
-        original = destination.announce
-        destination.rb_announce = original
-        destination.rb_exposed = False
-
-        def announce(app_data=None, path_response=False, attached_interface=None, tag=None, send=True):
-            if path_response and attached_interface is None and not destination.rb_exposed:
-                return None
-            return original(app_data=app_data, path_response=path_response,
-                            attached_interface=attached_interface, tag=tag, send=send)
-
-        destination.announce = announce
-
-    def _expose_ephemeral(self, source: Any) -> None:
-        """The ephemeral identity writes: rnsd learns the address now, or
-        the other side could not find its keys to read and answer."""
-        if getattr(source, "rb_exposed", True):
-            return
-        source.rb_exposed = True
-        try:
-            source.rb_announce(path_response=True)
-        except Exception as exc:
-            print(f"⚠️ Could not hand the ephemeral address to Reticulum: {exc}")
-
     def _watch(self) -> None:
-        """Follow the identities (the ephemeral one changes on its own) and
-        announce the one in use on the timer."""
+        """Follow the identities and announce the one in use on the timer."""
         tick = 0
         while True:
             time.sleep(1)
@@ -1116,10 +1105,14 @@ class Messenger:
                     # Only the identity in use, counted from when it was
                     # chosen or last announced (by hand too).
                     since = max(self.last_announce, self.listening_since)
-                    if (self.destination is not None and not self.using_ephemeral and not self.settings["offline"]
+                    if (self.destination is not None and not self.settings["offline"]
                             and self.settings["announce_periodic"] and since
                             and time.time() - since >= self.settings["announce_minutes"] * 60):
                         self._announce()
+                    for guest in self._guest_listeners():
+                        if (not self.settings["offline"] and self.settings["announce_periodic"]
+                                and time.time() - guest.announce_at >= self.settings["announce_minutes"] * 60):
+                            self._announce_guest(guest)
                     # Paths come and go: the nearest node is looked at again.
                     if tick % 30 == 0:
                         self._apply_propagation()
@@ -1133,9 +1126,7 @@ class Messenger:
                 time.sleep(10)
 
     def inbound_stamp_cost(self) -> Optional[int]:
-        """The stamp asked of senders now: none for the ephemeral identity."""
-        if self.using_ephemeral:
-            return None
+        """The stamp asked of senders now."""
         return self.settings["stamp_cost"] or None
 
     def _apply_stamps(self) -> None:
@@ -1147,11 +1138,16 @@ class Messenger:
             self.router.ignore_stamps()
         cost = self.settings["stamp_cost"] or None
         for listener in self.listeners.values():
-            self.router.set_inbound_stamp_cost(listener.destination.hash, None if listener.ephemeral else cost)
+            self.router.set_inbound_stamp_cost(listener.destination.hash, cost)
         if self.destination is not None and self.destination.hash.hex() not in self.listeners:
             self.router.set_inbound_stamp_cost(self.destination.hash, self.inbound_stamp_cost())
 
     def _announce(self) -> None:
+        if _GUEST_VIEW.get():
+            guest = self.guest_listener()
+            if guest is not None:
+                self._announce_guest(guest)
+            return
         self.router.announce(self.destination.hash)
         self.last_announce = time.time()
         self.revision += 1
@@ -1163,7 +1159,9 @@ class Messenger:
                 return {"status": "error", "error": "The messenger is off"}
             if self.settings["offline"]:
                 return {"status": "error", "error": "You are offline: go online to announce"}
-            wait = MANUAL_ANNOUNCE_GAP - (time.time() - self.last_announce)
+            guest = self.guest_listener() if _GUEST_VIEW.get() else None
+            last = (guest.announce_at if guest else 0.0) if _GUEST_VIEW.get() else self.last_announce
+            wait = MANUAL_ANNOUNCE_GAP - (time.time() - last)
             if wait > 0:
                 return {"status": "error", "error": f"Announced a moment ago: wait {int(wait) + 1} s"}
             self._announce()
@@ -1261,15 +1259,6 @@ class Messenger:
         except Exception as exc:
             print(f"⚠️ Could not set the propagation node: {exc}")
 
-    def _is_ephemeral_source(self, source: Any) -> bool:
-        """The message is sent as the ephemeral identity (checked against
-        the one it was written with, not the one in use now)."""
-        try:
-            eph = self.browser.identities.identity_for(EPHEMERAL)
-            return eph is not None and source.hash == RNS.Destination.hash(eph, "lxmf", "delivery")
-        except Exception:
-            return self.using_ephemeral
-
     def _pn_heard(self) -> None:
         with self.lock:
             self._apply_propagation()
@@ -1282,14 +1271,13 @@ class Messenger:
         if self.settings["offline"]:
             return "You are offline: go online to sync"
         # Every saved identity, the one in use first: a node keeps messages
-        # for each of them. The ephemeral one has none waiting there.
+        # for each of them.
         queue = [l.identity for l in sorted(self.listeners.values(),
-                                            key=lambda l: l.destination is not self.destination)
-                 if not l.ephemeral]
-        if not queue and self.identity is not None and not self.listeners and not self.using_ephemeral:
+                                            key=lambda l: l.destination is not self.destination)]
+        if not queue and self.identity is not None:
             queue = [self.identity]
         if not queue:
-            return "Propagation nodes are for saved identities only, not the ephemeral one"
+            return "The messenger is off"
         if not self.current_pn():
             return ("No propagation node heard yet" if self.settings["propagation_mode"] == "auto"
                     else "Propagation is off (Settings > LXMF Messenger)")
@@ -1377,7 +1365,6 @@ class Messenger:
         kind, text = self.SYNC_STATES.get(state, ("busy", ""))
         return {
             "mode": self.settings["propagation_mode"],
-            "ephemeral": self.using_ephemeral,
             "node": (self.pn.get(node) or {"hash": node}) if node else None,
             "heard": len(self.pn.nodes),
             "sync": {
@@ -1472,8 +1459,10 @@ class Messenger:
                 time.sleep(0.25)
         destination = RNS.Destination(identity, RNS.Destination.OUT, RNS.Destination.SINGLE,
                                       "lxmf", "delivery")
+        from .nomadnet import link_stamp_budget
+        stamp_budget = link_stamp_budget(dest_hash)
         link = RNS.Link(destination)
-        deadline = time.time() + 30
+        deadline = time.time() + 30 + stamp_budget
         while link.status not in (RNS.Link.ACTIVE, RNS.Link.CLOSED) and time.time() < deadline:
             time.sleep(0.1)
         active = link.status == RNS.Link.ACTIVE
@@ -1501,23 +1490,11 @@ class Messenger:
                 return entry["operator_name"]
         return ""
 
-    def _rate_check(self, ephemeral: Optional[bool] = None) -> Optional[str]:
-        if not (self.using_ephemeral if ephemeral is None else ephemeral):
-            return None
-        now = time.time()
-        while self._sent_times and now - self._sent_times[0] > 3600:
-            self._sent_times.popleft()
-        if now - self._last_sent < EPHEMERAL_GAP:
-            return f"Ephemeral identity: one message every {EPHEMERAL_GAP} s, wait {int(EPHEMERAL_GAP - (now - self._last_sent)) + 1} s"
-        if len(self._sent_times) >= EPHEMERAL_PER_HOUR:
-            return f"Ephemeral identity: at most {EPHEMERAL_PER_HOUR} messages an hour"
-        return None
-
     def send(self, peer: Any, content: Any, title: Any = "", propagated: bool = False,
              attachments: Optional[List[Any]] = None, reply_to: Any = None,
              auto: bool = False, via: Optional[Listener] = None) -> Dict[str, Any]:
         """propagated: straight to the propagation node, no direct attempt
-        (LXMessage.PROPAGATED). Saved identities only.
+        (LXMessage.PROPAGATED).
         attachments: [(name, bytes), ...] - the first image goes as
         FIELD_IMAGE, everything else as FIELD_FILE_ATTACHMENTS."""
         address = clean_address(peer)
@@ -1543,23 +1520,13 @@ class Messenger:
             # via: the identity that received what we answer (automatic
             # replies); else the one in use.
             store, source = (via.store, via.destination) if via is not None else (self.store, self.destination)
-            ephemeral = via.ephemeral if via is not None else self.using_ephemeral
             if address == source.hash.hex():
                 return {"status": "error", "error": "That is your own address"}
             other = self.wrong_aspect(address)
             if other:
                 return {"status": "error", "error": f"Not an LXMF address: it is {other}"}
-            if propagated:
-                if ephemeral:
-                    return {"status": "error", "error": "Propagation nodes are for saved identities only"}
-                if not self.current_pn():
-                    return {"status": "error", "error": "No propagation node (Settings > LXMF Messenger)"}
-            limited = self._rate_check(ephemeral)
-            if limited:
-                return {"status": "error", "error": limited}
-            if ephemeral:
-                self._last_sent = time.time()
-                self._sent_times.append(self._last_sent)
+            if propagated and not self.current_pn():
+                return {"status": "error", "error": "No propagation node (Settings > LXMF Messenger)"}
             local_id = os.urandom(8).hex()
             record = {"local_id": local_id, "id": None, "dir": "out", "content": text, "title": title,
                       "ts": time.time(), "state": "propagating" if propagated else "sending",
@@ -1678,12 +1645,6 @@ class Messenger:
             for meta in record.get("files", []):
                 if store.get_file(address, local_id, meta.get("index", 0)) is None:
                     return {"status": "error", "error": f"The copy of {meta.get('name')} is gone"}
-            limited = self._rate_check()
-            if limited:
-                return {"status": "error", "error": limited}
-            if self.using_ephemeral:
-                self._last_sent = time.time()
-                self._sent_times.append(self._last_sent)
             self._cancelled.discard(local_id)
             self.progress.pop(local_id, None)
             store.update(address, local_id, state="sending", method="direct", error=None, id=None,
@@ -1716,9 +1677,6 @@ class Messenger:
         with self.lock:
             if self.destination is None or self.store is None:
                 return {"status": "error", "error": self.error or "The messenger is off"}
-            limited = self._rate_check()
-            if limited:
-                return {"status": "error", "error": limited}
             store, source = self.store, self.destination
             if not store.set_reaction(address, message_id, "me", content):
                 return {"status": "error", "error": "No such message"}
@@ -1730,7 +1688,6 @@ class Messenger:
     def _send_reaction(self, store: Conversations, source: Any, address: str, message_id: str,
                        content: str) -> None:
         import LXMF
-        self._expose_ephemeral(source)
         dest_hash = bytes.fromhex(address)
         identity = self._recall_recipient(dest_hash)
         if identity is None:
@@ -1778,9 +1735,10 @@ class Messenger:
     # ------------------------------------------------------------------ #
 
     def peer_label(self, address: str) -> str:
-        """Our nickname for a contact, else its announced name, else the address."""
-        return (self.settings["nicknames"].get(address) or self.peer_name(address)
-                or RNS.prettyhexrep(bytes.fromhex(address)))
+        """Our nickname for a contact, else its announced name, else the address.
+        A guest never sees the owner's nicknames."""
+        nick = "" if _GUEST_VIEW.get() else self.settings["nicknames"].get(address)
+        return nick or self.peer_name(address) or RNS.prettyhexrep(bytes.fromhex(address))
 
     def set_nickname(self, peer: Any, nickname: Any) -> Dict[str, Any]:
         address = clean_address(peer)
@@ -1800,96 +1758,71 @@ class Messenger:
     # Our name in announces, one per identity                            #
     # ------------------------------------------------------------------ #
 
-    def _ephemeral_address(self) -> str:
-        eph = self.browser.identities.identity_for(EPHEMERAL)
-        return RNS.Destination.hash(eph, "lxmf", "delivery").hex() if eph is not None else ""
-
-    def _display_name_key(self, identity_id: str) -> Optional[str]:
-        if identity_id != EPHEMERAL:
-            return identity_id
-        address = self._ephemeral_address()
-        return f"{EPHEMERAL}:{address}" if address else None
-
     def display_name_of(self, identity_id: str) -> str:
-        """The name announced for an identity; ephemeral ones nobody renamed
-        are eph_ and the first 4 hex of their address."""
-        key = self._display_name_key(identity_id)
-        if key is None:
-            return ""
-        name = self.settings["display_names"].get(key, "")
-        if not name and identity_id == EPHEMERAL:
-            name = ephemeral_default_name(key.split(":", 1)[1])
-        return name
+        """The name announced for an identity; the guest's is the one of every client."""
+        if identity_id == GUEST_ID:
+            return self.guest_display_name()
+        return self.settings["display_names"].get(identity_id, "")
+
+    def guest_display_name(self, gid: Optional[str] = None) -> str:
+        keys = getattr(self.browser, "guest_identity", None)
+        return keys.nickname("messenger", gid) if keys is not None else GUEST_NAME
+
+    def guest_renamed(self, gid: str) -> None:
+        """A guest's new LXMF name: announced at once."""
+        with self.lock:
+            guest = self.guest_listener(gid)
+            if guest is None or self.router is None:
+                return
+            name = self.guest_display_name(gid)
+            if guest.destination.display_name == name:
+                return
+            guest.destination.display_name = name
+            if not self.settings["offline"]:
+                self._announce_guest(guest)
+
+    def guest_ready(self, gid: str) -> None:
+        """A guest's stamp is in: it listens and announces now."""
+        with self.lock:
+            self._sync_identity()
+
+    def guest_gone(self, gid: str, identity: Any) -> None:
+        """A guest session is over: its listener, chats, files and ratchets go."""
+        address = RNS.Destination.hash(identity, "lxmf", "delivery").hex()
+        with self.lock:
+            if address in self.listeners:
+                self._drop_listener(address)
+                self.last_incoming_for.pop(address, None)
+                self.revision += 1
+        try:
+            folder = self.router.ratchetpath if self.router is not None else ""
+            path = os.path.join(folder, address + ".ratchets") if folder else ""
+            if path and os.path.isfile(path):
+                os.remove(path)
+        except Exception as exc:
+            print(f"⚠️ Guest ratchets: {exc}")
 
     def current_display_name(self) -> str:
-        return self.display_name_of(self.settings["identity"])
+        return self.display_name_of(GUEST_ID if _GUEST_VIEW.get() else self.settings["identity"])
 
     def _store_display_name(self, identity_id: str, name: Any) -> None:
-        key = self._display_name_key(identity_id)
-        if key is None:
-            return
         names = self.settings["display_names"]
-        if identity_id == EPHEMERAL:
-            # Only the ephemeral identity of now: the others are gone for good.
-            for old in [k for k in names if k.startswith(f"{EPHEMERAL}:") and k != key]:
-                names.pop(old)
         name = clean_display_name(name)
-        if not name or (identity_id == EPHEMERAL and name == ephemeral_default_name(key.split(":", 1)[1])):
-            names.pop(key, None)
+        if not name:
+            names.pop(identity_id, None)
         else:
-            names[key] = name
-
-    def keep_ephemeral(self, name: Any = None) -> Dict[str, Any]:
-        """The ephemeral identity in use becomes a saved one, address and all:
-        its conversations and files go to disk, its name to the profile, and
-        from now on it is reachable like any saved identity. The browser
-        moves to it only if it was browsing as the same ephemeral identity."""
-        ids = self.browser.identities
-        with self.lock:
-            if not self.using_ephemeral or self.destination is None:
-                return {"status": "error", "error": "No ephemeral identity in use in the messenger"}
-            destination = self.destination
-            address = destination.hash.hex()
-            my_name = self.current_display_name()
-            profile = ids.keep_ephemeral(clean_display_name(name) or my_name or "Kept identity",
-                                         activate=ids.active_id == EPHEMERAL)
-            names = self.settings["display_names"]
-            names.pop(f"{EPHEMERAL}:{address}", None)
-            if my_name:
-                names[profile["id"]] = my_name
-            self.settings["identity"] = profile["id"]
-            self.settings["fixed_identity"] = profile["id"]
-            if self.store is not None:
-                self.store.persist()
-            listener = self.listeners.get(address)
-            if listener is not None:
-                listener.id = profile["id"]
-                listener.ephemeral = False
-                # Its ratchets are a profile's now: kept at exit.
-                listener.ratchet = None
-            self.ephemeral_store = None
-            self.using_ephemeral = False
-            self.ephemeral_ratchet = None
-            original = getattr(destination, "rb_announce", None)
-            if original is not None:
-                del destination.announce
-                # rnsd learns the address, as for any saved identity.
-                if not getattr(destination, "rb_exposed", True):
-                    try:
-                        original(path_response=True)
-                    except Exception as exc:
-                        print(f"⚠️ Could not hand the address to Reticulum: {exc}")
-            self._apply_stamps()
-            self._save_settings()
-            self.revision += 1
-        print(f"💬 Ephemeral identity {RNS.prettyhexrep(destination.hash)} kept as {profile['name']}")
-        return {"status": "success", "id": profile["id"], "name": profile["name"]}
+            names[identity_id] = name
 
     def set_display_name(self, identity_id: Any, name: Any) -> Dict[str, Any]:
-        """The pencil in the Messages bar. A saved identity in use announces
-        the new name at once; the ephemeral one only with Announce."""
+        """The pencil in the Messages bar. The identity in use announces
+        the new name at once."""
         identity_id = str(identity_id or "")
-        if identity_id != EPHEMERAL and self.browser.identities.identity_for(identity_id) is None:
+        if identity_id == GUEST_ID or _GUEST_VIEW.get():
+            if not _GUEST_VIEW.get():
+                return {"status": "error", "error": "Guests name themselves"}
+            self.browser.guest_identity.set_nickname(name, "messenger")     # announced by guest_renamed
+            return {"status": "success", "name": self.guest_display_name(), "announced": not self.settings["offline"]}
+        if self.browser.identities.identity_for(identity_id) is None:
             return {"status": "error", "error": "No such identity"}
         with self.lock:
             before = self.display_name_of(identity_id)
@@ -1904,7 +1837,7 @@ class Messenger:
                     listener.destination.display_name = now or None
             if (self.destination is not None and identity_id == self.settings["identity"]):
                 self.destination.display_name = now or None
-                if now != before and not self.using_ephemeral:
+                if now != before:
                     self._announce()
                     announced = True
             self.revision += 1
@@ -1929,7 +1862,8 @@ class Messenger:
                     if name:
                         self.store.data[address]["name"] = name
                 self.store._save(address)
-            nick = clean_nickname(nickname)
+            # The nicknames are the owner's: a guest's contact gets none.
+            nick = "" if _GUEST_VIEW.get() else clean_nickname(nickname)
             if nick:
                 self.settings["nicknames"][address] = nick
                 self._save_settings()
@@ -1971,7 +1905,6 @@ class Messenger:
     def _send_job(self, store: Conversations, source: Any, address: str, local_id: str,
                   text: str, title: str, propagated: bool = False) -> None:
         import LXMF
-        self._expose_ephemeral(source)
         dest_hash = bytes.fromhex(address)
         identity = self._recall_recipient(dest_hash)
         if identity is None:
@@ -1991,11 +1924,7 @@ class Messenger:
                          error="Nobody answered on this address: no LXMF client is listening there")
             self.revision += 1
             return
-        # Keys known from an old announce, but no path now: the network is
-        # asked first, so the first direct try already has one.
-        if not propagated and not self._find_path(dest_hash, store, address, local_id):
-            if local_id in self._cancelled:
-                return
+        # No path now: LXMF asks the network itself, as in Sideband (no wait here).
         try:
             destination = RNS.Destination(identity, RNS.Destination.OUT, RNS.Destination.SINGLE,
                                           "lxmf", "delivery")
@@ -2003,14 +1932,7 @@ class Messenger:
             # write to gets a ticket and answers without one (NomadNet
             # does this for trusted contacts).
             fields = self._fields_for(store, address, local_id)
-            if propagated:
-                method = LXMF.LXMessage.PROPAGATED
-            elif (self.settings["opportunistic"]
-                  and not (LXMF.FIELD_IMAGE in fields or LXMF.FIELD_FILE_ATTACHMENTS in fields)):
-                # One packet if it fits; LXMF falls back to a link if not.
-                method = LXMF.LXMessage.OPPORTUNISTIC
-            else:
-                method = LXMF.LXMessage.DIRECT
+            method = LXMF.LXMessage.PROPAGATED if propagated else self._direct_method(dest_hash)
             message = LXMF.LXMessage(destination, source, text, title,
                                      fields=fields or None,
                                      desired_method=method,
@@ -2034,16 +1956,18 @@ class Messenger:
                 if local_id in self._cancelled:
                     self._outbound.pop(local_id, None)
                     return
-                # Direct failed: once more with a path asked afresh (a transit
-                # node may hold an old one until the recipient announces
-                # again), before the propagation node.
-                if (msg.desired_method != LXMF.LXMessage.PROPAGATED and not getattr(msg, "_rb_rediscovered", False)
+                # Not delivered: tried again send_retries times, each with a
+                # path asked afresh (a transit node may hold an old one), then
+                # the propagation node.
+                tries = getattr(msg, "_rb_retries", 0)
+                if (msg.desired_method != LXMF.LXMessage.PROPAGATED and tries < self.settings["send_retries"]
                         and not getattr(msg, "stamp_generation_failed", False)):
-                    msg._rb_rediscovered = True
+                    msg._rb_retries = tries + 1
+                    total = self.settings["send_retries"]
                     store.update(address, local_id, state="waiting",
-                                 error="Direct delivery failed: asking the network for a fresh path")
+                                 error=f"Not delivered: asking for a fresh path, retry {tries + 1} of {total}")
                     self.revision += 1
-                    print(f"💬 LXMF message to {label}: direct failed, asking for a fresh path")
+                    print(f"💬 LXMF message to {label}: not delivered, retry {tries + 1} of {total}")
 
                     def again() -> None:
                         try:
@@ -2058,9 +1982,10 @@ class Messenger:
                         if hasattr(msg, "next_delivery_attempt"):
                             del msg.next_delivery_attempt
                         msg.packed = None
+                        msg.desired_method = self._direct_method(msg.get_destination().hash)
                         msg.state = LXMF.LXMessage.OUTBOUND
                         store.update(address, local_id, state="sending",
-                                     error="Direct delivery failed once: trying again")
+                                     error=f"Not delivered: retry {tries + 1} of {total}")
                         self.revision += 1
                         self.router.handle_outbound(msg)
                     threading.Thread(target=again, name="lxmf-repath", daemon=True).start()
@@ -2076,9 +2001,9 @@ class Messenger:
                     msg.packed = None
                     msg.desired_method = LXMF.LXMessage.PROPAGATED
                     store.update(address, local_id, state="propagating", method="propagated",
-                                 error="Direct delivery failed: leaving it on the propagation node")
+                                 error="Not delivered after the retries: leaving it on the propagation node")
                     self.revision += 1
-                    print(f"💬 LXMF message to {label}: direct failed, trying the propagation node")
+                    print(f"💬 LXMF message to {label}: retries failed, trying the propagation node")
                     self._apply_propagation()
                     self.router.handle_outbound(msg)
                     return
@@ -2111,10 +2036,7 @@ class Messenger:
 
             message.register_delivery_callback(delivered)
             message.register_failed_callback(failed)
-            # Saved identities only: an ephemeral identity never leaves
-            # messages on a node, nor collects from one.
-            if (not propagated and self.current_pn() and source is not None
-                    and not self._is_ephemeral_source(source)):
+            if not propagated and self.current_pn() and source is not None:
                 message.try_propagation_on_fail = True
             store.update(address, local_id, state="propagating" if propagated else "sending", error=None)
             self.revision += 1
@@ -2137,15 +2059,28 @@ class Messenger:
             store.update(address, local_id, state="failed", error=f"Could not send: {exc}")
             self.revision += 1
 
+    def _direct_method(self, dest_hash: bytes) -> int:
+        """As Sideband: one packet (opportunistic) when no link is open and the
+        recipient's ratchet is known, else by link (direct). LXMF goes by link
+        anyway when the message does not fit in a packet."""
+        import LXMF
+        try:
+            link = self.router is not None and self.router.delivery_link_available(dest_hash)
+            if not link and RNS.Identity.current_ratchet_id(dest_hash) is not None:
+                return LXMF.LXMessage.OPPORTUNISTIC
+        except Exception:
+            pass
+        return LXMF.LXMessage.DIRECT
+
     def _find_path(self, dest_hash: bytes, store: Conversations, address: str, local_id: str,
                    fresh: bool = False) -> bool:
         """Asks the network for a path to the recipient and waits for it
         (PATH_WAIT at most, less if cancelled). True once there is one."""
         if not fresh and RNS.Transport.has_path(dest_hash):
             return True
-        store.update(address, local_id, state="waiting", error=None if not fresh else
-                     "Direct delivery failed: asking the network for a fresh path")
-        self.revision += 1
+        if not fresh:                       # fresh: the retry already says what is going on
+            store.update(address, local_id, state="waiting", error=None)
+            self.revision += 1
         RNS.Transport.request_path(dest_hash)
         deadline = time.time() + PATH_WAIT
         while time.time() < deadline and local_id not in self._cancelled:
@@ -2232,28 +2167,41 @@ class Messenger:
                 if isinstance(quote, (bytes, bytearray)):
                     quote = bytes(quote).decode("utf-8", "replace")
                 record["reply_quote"] = str(quote or "")[:REPLY_QUOTE_MAX]
-            self._apply_appearance(peer, fields)
+            guest = listener is not None and listener.is_guest
+            if not guest:
+                # The guest's contacts do not change the owner's settings.
+                self._apply_appearance(peer, fields)
             store.add(peer, record, name=name, unread=True)
             self.incoming_seq += 1
-            self.last_incoming = {"seq": self.incoming_seq, "peer": peer, "name": self.peer_label(peer),
-                                  "preview": record["content"][:140], "ts": record["ts"]}
+            incoming = {"seq": self.incoming_seq, "peer": peer,
+                        "name": ((self.peer_name(peer) or RNS.prettyhexrep(bytes.fromhex(peer))) if guest
+                                 else self.peer_label(peer)),
+                        "preview": record["content"][:140], "ts": record["ts"]}
             if listener is not None:
                 # Which of our identities it came to: the page says so when
                 # it is not the one in use, and a click goes there.
-                self.last_incoming.update(identity=listener.id, to=listener.address,
-                                          identity_name=self._identity_label(listener),
-                                          other=listener.destination is not self.destination)
+                incoming.update(identity=listener.id, to=listener.address,
+                                identity_name=self._identity_label(listener),
+                                other=listener.destination is not self.destination)
+                self.last_incoming_for[listener.address] = dict(incoming, other=False)
+            if not guest:
+                # The owner's page is not told about the guests' messages.
+                self.last_incoming = incoming
+            elif self.on_guest_message is not None:
+                self.on_guest_message(listener.gid, peer, record.get("content", ""), len(files))
             self.revision += 1
             print(f"💬 LXMF message from {self.peer_label(peer)}"
                   + (f", {len(files)} file{'s' if len(files) != 1 else ''}" if files else ""))
         except Exception as exc:
             print(f"⚠️ Could not store an incoming LXMF message: {exc}")
             return
-        self._maybe_autoreply(peer, record, listener)
+        # The owner's automatic replies never speak as the guest.
+        if not (listener is not None and listener.is_guest):
+            self._maybe_autoreply(peer, record, listener)
 
     def _identity_label(self, listener: Listener) -> str:
-        if listener.ephemeral:
-            return "Ephemeral"
+        if getattr(listener, "id", None) == GUEST_ID:
+            return self.guest_display_name(listener.gid) or GUEST_NAME
         return self.browser.identities.name_of(listener.id)
 
     def _maybe_autoreply(self, peer: str, record: Dict[str, Any], listener: Optional[Listener] = None) -> None:
@@ -2302,8 +2250,7 @@ class Messenger:
     def _incoming_files(self, store: Conversations, peer: str, name: str, local_id: str,
                         message: Any) -> (List[Dict[str, Any]], List[str]):
         """FIELD_IMAGE and FIELD_FILE_ATTACHMENTS of a message received.
-        Saved under downloads/<contact>/ with their own names; for the
-        ephemeral identity kept in memory only."""
+        Saved under downloads/<contact>/ with their own names."""
         import LXMF
         fields = getattr(message, "fields", None) or {}
         found = []                     # (name, bytes, is_image)
@@ -2338,7 +2285,7 @@ class Messenger:
         for index, (fname, data, is_image) in enumerate(found):
             try:
                 if store.on_disk:
-                    rel = self._save_download(name or peer[:16], fname, data)
+                    rel = self._save_download(name or peer[:16], fname, data, store.downloads_sub)
                     metas.append(self._file_meta(fname, len(data), is_image, path=rel))
                 else:
                     store.put_file(peer, local_id, index, data)
@@ -2350,10 +2297,12 @@ class Messenger:
         return metas, unsupported
 
     @staticmethod
-    def _save_download(contact: str, fname: str, data: bytes) -> str:
-        """downloads/<contact>/<name>, "name (2).ext" when taken. Returns the
-        path relative to downloads/."""
+    def _save_download(contact: str, fname: str, data: bytes, sub: str = "") -> str:
+        """downloads/[sub/]<contact>/<name>, "name (2).ext" when taken. Returns
+        the path relative to downloads/."""
         folder_name = safe_filename(contact, "contact")
+        if sub:
+            folder_name = f"{safe_filename(sub, 'guest')}/{folder_name}"
         folder = os.path.join(DOWNLOADS_DIR, folder_name)
         os.makedirs(folder, exist_ok=True)
         stem, dot, ext = fname.rpartition(".")
@@ -2476,19 +2425,62 @@ class Messenger:
     # For the API                                                        #
     # ------------------------------------------------------------------ #
 
+    # What a guest's page gets of the settings: how the chat looks and works.
+    GUEST_SETTINGS = ("enabled", "offline", "markdown", "sideband_look", "autosend_files", "image_previews",
+                      "send_retries", "check_new_contacts", "propagation_mode", "propagation_fallback",
+                      "announce_periodic", "announce_minutes", "sync_periodic", "stamp_cost")
+
+    def _guest_status(self) -> Dict[str, Any]:
+        """status() for a guest: the guest identity only, nothing of the owner's
+        (other identities, nicknames, blocked list, automatic replies)."""
+        guest = self.guest_listener()
+        address = guest.address if guest is not None else None
+        settings = {k: self.settings[k] for k in self.GUEST_SETTINGS}
+        nick = self.guest_display_name()
+        settings.update(identity=GUEST_ID, display_name=nick, autoreply_on=False, echo_on=False,
+                        away_mode="off", share_contacts=False)
+        error = None
+        if guest is None:
+            error = ("The LXMF messenger is off" if not self.settings["enabled"] or self.router is None
+                     else "The guest identity is not listening yet")
+        return {
+            "status": "success",
+            "settings": settings,
+            "identities": ([{"id": GUEST_ID, "name": GUEST_NAME, "display_name": nick, "address": address,
+                             "unread": guest.store.unread_total(), "listening": True}] if guest else []),
+            "announce_choices": list(ANNOUNCE_CHOICES),
+            "stamp_choices": list(STAMP_CHOICES),
+            "nicknames": {}, "favorites": [], "appearances": {}, "colors": {}, "blocked": [],
+            "peers_revision": self.peers.revision,
+            "quick_reactions": list(QUICK_REACTIONS),
+            "stamp_cost_now": self.inbound_stamp_cost(),
+            "attach_limits": {"bytes": MAX_ATTACH_BYTES, "files": MAX_ATTACH_FILES,
+                              "propagation": PN_TYPICAL_LIMIT},
+            "running": guest is not None,
+            "address": address,
+            "identity_name": GUEST_NAME,
+            "last_announce": (guest.announce_at if guest else 0) or None,
+            "unread": guest.store.unread_total() if guest else 0,
+            "unread_other": 0,
+            "listening": 1 if guest else 0,
+            "incoming_transfers": [t for t in self.incoming_transfers() if address and t["to"] == address],
+            "unread_peers": ({GUEST_ID: {p: int(c.get("unread", 0)) for p, c in list(guest.store.data.items())
+                                         if c.get("unread")}} if guest else {}),
+            "incoming": self.last_incoming_for.get(address or "") or {"seq": 0},
+            "propagation": self.sync_status(),
+            "revision": self.revision,
+            "error": error,
+        }
+
     def status(self) -> Dict[str, Any]:
+        if _GUEST_VIEW.get():
+            return self._guest_status()
         ids = self.browser.identities
-        rotates_in = None
-        if self.using_ephemeral:
-            mode = ids.state.get("ephemeral_mode")
-            due = ids.next_rotation() if ids.active_id == EPHEMERAL else None
-            rotates_in = {"mode": mode,
-                          "seconds": None if due is None else max(0, round(due - time.time()))}
         # For the identity switch in the Messages tab.
         choices = []
         # Unread per identity: they all listen, and the page shows where a
         # message went when it is not the identity in use.
-        unread_of = {l.address: l.store.unread_total() for l in self.listeners.values()}
+        unread_of = {l.address: l.store.unread_total() for l in self._owner_listeners()}
         for profile in ids.state.get("profiles", []):
             identity = ids.identity_for(profile["id"])
             if identity is not None:
@@ -2497,13 +2489,6 @@ class Messenger:
                                 "display_name": self.display_name_of(profile["id"]),
                                 "address": address, "unread": unread_of.get(address, 0),
                                 "listening": address in unread_of})
-        if self.settings["allow_ephemeral"]:
-            eph = ids.identity_for(EPHEMERAL)
-            eph_address = RNS.Destination.hash(eph, "lxmf", "delivery").hex() if eph else ""
-            choices.append({"id": EPHEMERAL, "name": "Ephemeral",
-                            "display_name": self.display_name_of(EPHEMERAL),
-                            "address": eph_address, "unread": unread_of.get(eph_address, 0),
-                            "listening": eph_address in unread_of})
         return {
             "status": "success",
             # display_name: the name of the identity in use, for the page.
@@ -2523,20 +2508,17 @@ class Messenger:
                               "propagation": PN_TYPICAL_LIMIT},
             "running": self.destination is not None,
             "address": self.destination.hash.hex() if self.destination is not None else None,
-            "identity_name": ("Ephemeral" if self.using_ephemeral
-                              else ids.name_of(self.settings["identity"])),
-            "ephemeral": self.using_ephemeral,
-            "ephemeral_rotation": rotates_in,
+            "identity_name": ids.name_of(self.settings["identity"]),
             "last_announce": self.last_announce or None,
             "unread": self.store.unread_total() if self.store else 0,
             "unread_other": sum(n for a, n in unread_of.items()
                                 if self.destination is None or a != self.destination.hash.hex()),
-            "listening": len(self.listeners),
+            "listening": len(self._owner_listeners()),
             "incoming_transfers": self.incoming_transfers(),
             # For the chat tabs: unread per contact on every identity.
             "unread_peers": {l.id: {p: int(c.get("unread", 0)) for p, c in list(l.store.data.items())
                                     if c.get("unread")}
-                             for l in self.listeners.values()},
+                             for l in self._owner_listeners()},
             "incoming": self.last_incoming or {"seq": self.incoming_seq},
             "blocked": [{"address": a, "name": v.get("name", ""), "at": v.get("at")}
                         for a, v in sorted(self.settings["blocked"].items(),
@@ -2596,7 +2578,7 @@ class Messenger:
         for row in rows:
             if not row["name"]:
                 row["name"] = self.peer_name(row["peer"])
-        if self.settings["share_contacts"]:
+        if self.settings["share_contacts"] and not _GUEST_VIEW.get():
             rows += self.shared_contacts()
         return rows
 
@@ -2606,11 +2588,11 @@ class Messenger:
         time - each marked with the identity it belongs to (shared_from,
         shared_id). We listen on all of them, so all of them show; a
         conversation is opened, and answered, as its own identity. Our own
-        addresses and the ephemeral identity are left out."""
+        addresses are left out."""
         ours = set(self.listeners)
         rows: List[Dict[str, Any]] = []
-        for listener in list(self.listeners.values()):
-            if listener.ephemeral or listener.store is self.store:
+        for listener in self._owner_listeners():
+            if listener.store is self.store:
                 continue
             name = self.browser.identities.name_of(listener.id)
             for row in listener.store.listing():
@@ -2705,7 +2687,7 @@ class Messenger:
             "status": "success",
             "address": address,
             "name": self.peer_name(address),
-            "nickname": self.settings["nicknames"].get(address, ""),
+            "nickname": "" if _GUEST_VIEW.get() else self.settings["nicknames"].get(address, ""),
             "identity_hash": identity_hash,
             "keys_known": identity is not None,
             "announced": rnsquiet.recall_app_data(dest_hash) is not None,
@@ -2725,7 +2707,8 @@ class Messenger:
         if not address:
             return []
         out = []
-        for listener in list(self.listeners.values()):
+        mine = [self.guest_listener()] if _GUEST_VIEW.get() else self._owner_listeners()
+        for listener in [l for l in mine if l is not None]:
             store = listener.store
             if store is not None and address in store.data:
                 out.append({"address": listener.address, "name": self._identity_label(listener),
@@ -2750,8 +2733,8 @@ class Messenger:
         if not address or self.store is None:
             return False
         stores = [self.store]
-        if everywhere:
-            stores += [l.store for l in list(self.listeners.values())
+        if everywhere and not _GUEST_VIEW.get():
+            stores += [l.store for l in self._owner_listeners()
                        if l.store is not None and l.store is not self.store]
         done = False
         for store in stores:

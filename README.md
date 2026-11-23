@@ -21,7 +21,7 @@ A modern, web-based UI for exploring NomadNet nodes and pages over the Reticulum
 
 
 
-> **Beta - v2.0.6b.** rBrowser 2 is published as a beta: everything works, but
+> **Beta - v2.0.7b.** rBrowser 2 is published as a beta: everything works, but
 > some parts of the interface may still have bugs. They are fixed as soon as
 > possible. To hear about updates, switch on *Settings > About > Check for
 > updates at start* (a window tells you when a new version is out, with the
@@ -120,7 +120,7 @@ It also runs well on a remote machine (a Raspberry Pi at home, a server):
 - **Add To Favorites**: Favorite system with star button synched across the whole UI tabs
 - ℹ **Node Info**: Extended node info for remote node hosting page in the node list
 - **Fingerprint**: Allow to identify with identity and LXMF address to remote host with a button
-- **Identities**: Several identities (one per account), an ephemeral throwaway identity, per-node auto-identify; the identity button in the page bar drops a menu to browse as another one (new ephemeral, copy the hash, settings)
+- **Identities**: Several identities (one per account), per-node auto-identify; the identity button in the page bar drops a menu to browse as another one (copy the hash, settings)
 - **Custom address generator**: Identities whose LXMF address starts with characters you choose (vanity address), searched in the background
 - **Web server settings**: Host and port editable in Settings, with automatic restart
 - **Inline Images**: Renders images embedded in Micron pages, fetched over the node's `/media` handler
@@ -148,19 +148,18 @@ It also runs well on a remote machine (a Raspberry Pi at home, a server):
 - **Stamps for incoming messages**: Anti-spam cost in your announce, tickets for your contacts
 - **Local network name**: `rbrowser.local` via mDNS, optional
 - **System links**: `nomadnetwork://` and `rbrowser://` links open in the rBrowser that is running (Windows, Linux)
-- **Settings in categories**: Search, one Save for all (the dialog stays open; Close, x or Esc close it), unsaved-changes and restart-needed warnings
+- **Settings in categories**: Search, one Save for all (the dialog stays open; Close, x or Esc close it), unsaved and not-applied changes in amber, restart-needed warnings
 - **Reload, Restart and Shut down**: Buttons at the foot of the Settings categories: Reload reloads the page, Restart and Shut down ask first (not shown to guests)
 - **Contact colours**: Pick a contact's colour with a preview; click the logo for its info
 - **Recent nodes at start**: Optional, from Reticulum's known announces, marked until they announce again
 - **Screenshot settings**: On/off, quality for desktop and mobile
-- **Advanced options**: Unlocked by tapping the version seven times; ephemeral identity messages with limits
 - **Responsive Fit**: Text at full size on any screen, only too-wide ASCII art shrinks; measured on the device, so pages fit on real phones too
 - ⏱ **Adaptive Timeouts**: Waits as long as the path actually needs instead of a fixed clock, so slow LoRa nodes are not declared dead
 - **Notifications & Logs**: Notifications in the web UI; the terminal shows only the kinds of line you choose in Settings
 - **BBS client**: RetiBBS boards over Reticulum, several at once, terminal-style screen
 - **Automatic replies**: Keywords, away message and echo, for LXMF and RRC
 - **Remote access & DDNS**: Cloudflare tunnel to reach it from anywhere, dynamic DNS for a host name, access password
-- **Guest mode**: A second password for other people; settings, identities and keys stay yours
+- **Guest mode**: Other people in with a guest password or none; settings, identities and keys stay yours
 - **One-click install**: `install.sh`, `install.bat` and `docker.sh` set up the packages and Reticulum
 - **And more......**: Download rBrowser and try it now!!
 
@@ -328,6 +327,9 @@ screen at startup can be switched off in Settings > System Setup.
    then follows its log (`--port N` for one on another port).
    `--open LINK` opens a `nomadnetwork://` or `rrc://` link in the running rBrowser (starting it if needed);
    `--register-links` / `--unregister-links` make those links open with rBrowser (Windows, Linux), then exit.
+   `--set-password` sets the access password and switches it on, `--guest-setup` sets up Guest mode
+   with a few questions: both with rBrowser stopped, then exit. On a server, run `--set-password`
+   before the first start.
 
 4. **Open your web browser and navigate to:**
    ```
@@ -580,12 +582,16 @@ reachable.
 **Several identities.** Browsing is anonymous: a node only learns who you are
 when you identify to it (the fingerprint), and it keys accounts on that
 identity. In Settings you can keep several identities, switch between them,
-import and export them, and use an **ephemeral** one: a throwaway key kept
-only in memory, replaced at every start, at every press of reload, or on a
-timer (every 30 s to 1 h, without reloading the page). "Keep"
-saves it as a normal identity, the only way back to accounts made with it.
-Your existing `nomadnet_browser_identity` is the default one, unchanged.
+import and export them (the list shows each one's identity hash and LXMF
+address, click to copy). Your existing `nomadnet_browser_identity` is the default one, unchanged.
 Pages seen while identified are never stored in the page cache.
+
+**Link stamps.** NomadNet 1.5.1 nodes ask a link stamp of cost 17.8 before
+they answer, against scraping. RNS computes it on one core on Windows and
+macOS: rBrowser runs the same search on all cores (a few seconds instead of up
+to a minute or two), waits up to 5 minutes instead of the 15 s RNS default, and
+the page header says the stamp is being computed. Later pages
+of the same node reuse the open link and are quick.
 
 **Custom address generator.** Settings > Identity > Generate vanity address:
 a new identity whose LXMF address (or, for RRC, identity hash) starts or
@@ -598,6 +604,13 @@ for another app.
 with. Switched on, rBrowser sends the fingerprint on its own, with that
 identity, when you open one of its pages - once per node per session. If a
 different identity is in use, it asks before switching.
+
+**Node links.** The link to a node stays open while its tab is open, so the
+next page comes at once. Closing the tab closes the link; a tab left in the
+background (another tab, another app, window minimised) loses it after 60 s,
+and its next page opens a new one. A file still downloading is never cut.
+The node sees you leave when you leave, not minutes later. A link closed
+this way forgets a manual Identify: auto-identify sends it again.
 
 **Reticulum interfaces.** Always watched, nothing is sent: when an interface
 to the network goes down (a TCP link lost, a phone out of coverage) or comes
@@ -618,7 +631,8 @@ rBrowser2 icon on the desktop and in the app menu (Windows Start menu, Linux
 app menu; macOS desktop only) that opens rBrowser in its own window, or just a
 window if it is already running. To pin it to the Windows taskbar: right-click
 rBrowser2 in the Start menu > Pin to taskbar. Started from the icon there is
-no terminal: the log is in `settings/app.log`.
+no terminal: the log is in `settings/app.log` (the window's in `settings/window.log`,
+the previous run's in `.1`).
 
 **Internet check.** Settings > System Setup, off by default. When on, rBrowser
 checks every 30 seconds (you pick from 10 seconds to 24 hours), with a
@@ -630,6 +644,38 @@ once, so a dead server is not taken for a dead line. While it is away, what uses
 instead of filling the log with errors (update check, RMAP download, Dynamic
 DNS) and goes on when it is back. NomadNet, LXMF and RRC go on as usual: they
 run over Reticulum, which may also have radio links. Off, nothing is contacted.
+
+**rB2 Monitor.** Settings > System Setup, off by default. A MON tab, always
+last in the tab bar, with everything rBrowser is doing on one live page in
+the style of an old amber terminal: system (CPU, RAM, uptime), network (where
+it listens, tunnel, DDNS, internet check), Reticulum and each interface
+(traffic, speed, radio), identities and where each is used, announces by kind
+per minute and hour with the last ones heard, LXMF, RRC, BBS, NomadNet and
+RMAP, and the last lines of the log. Read only, updated every 2 seconds while
+on screen. Never shown to guests. Terminal CRT EFX, just under it, adds
+scanlines, glow, a soft blur and flicker; Monitor theme picks the colours
+(amber, green or orange phosphor, ice blue, paper white, synthwave, LCD), and
+the ◐ button in the Monitor's bar goes to the next one.
+
+**Radio-LXST Client.** Settings > System Setup, off by default. A RADIO tab to listen to
+[radio-lxst](https://github.com/fr33n0w/radio-lxst) stations over Reticulum:
+stations heard from their announces (★ favourites first) or a Call ID typed
+in, Next and Random (stations on air only), track bar or the live stream's
+title, quality asked to the station (also while listening), volume and VU
+meter. The sound plays on the
+device you are using (phone, tunnel), not on the rBrowser computer, and keeps
+playing on the other tabs. Nothing new to install: rBrowser passes the
+station's Opus audio to the browser as it is. Needs a browser that plays Ogg
+Opus (Chrome, Firefox, Edge, Android). The stations see the identity picked
+in the bar of the tab (one of yours, no extra one) and the name announced for
+it in the Messenger. Guests (if you open the Radio to them in Guest mode)
+listen with their guest identity, each on a call of its own.
+The Commands pane sends the station's commands (help, info, status, link,
+subscribe, unsubscribe) from the same identity through the Messenger, which
+must be on (for guests too); the replies show there and in the Messenger.
+Stations you subscribed to are marked SUBSCRIBED. While the tab is open rBrowser asks
+each station for its state (on air, listeners, track) every few minutes, ⟳ asks now:
+announces only say that a station exists.
 
 **Web server settings.** `--host` and `--port` can also be set in Settings.
 A change needs a restart: rBrowser offers to do it, restarts itself and the
@@ -643,7 +689,7 @@ addresses to open it at: this device, the home network, the tunnel and the DDNS 
 `http://rbrowser.local:5000` without the IP. It is announced with mDNS
 (zeroconf, installed with the requirements) and applies at once. Only when
 rBrowser listens on the network (`0.0.0.0`). Anyone on that network can open
-it: turn on the access password (Settings > System Setup) to keep them out.
+it: turn on the access password (Settings > Access & Remote) to keep them out.
 
 **Links from anywhere.** `nomadnetwork://`, `rrc://` and `rbrowser://` links
 on web pages (rmap.world's "Open in rBrowser2") and in other programs open in
@@ -659,11 +705,13 @@ tab title blinks). Windows and Linux with a desktop; from the terminal,
 `--register-links` / `--unregister-links`.
 
 **Settings.** Grouped in categories (Identity, Pages, NomadNet Browser,
-LXMF Messenger, RRC Client, BBS Client, RMAP, System, Advanced, About) with a search box over all of them; one Save
-writes every category. A changed category gets a dot, and closing with
-changes not saved asks Save / Discard / Keep editing. Changing host or port
-marks System in amber and says a restart is needed, offered after saving.
-Identity, Links, Restore and Unblock apply at once.
+LXMF Messenger, RRC Client, BBS Client, RMAP, System, About) with a search box over all of them; one Save
+writes every category. A change not saved yet shows in amber: a dot on its
+category, a mark on the row, the Save button, and a box next to it listing what
+is waiting (a click shows it). Guest mode and Dynamic DNS have their own Apply,
+which turns amber the same way: Save does not apply them. Closing with changes
+left asks Save / Discard / Keep editing. Changing host or port says a restart
+is needed, offered after saving. Identity, Links, Restore and Unblock apply at once.
 
 **Start with recent nodes.** Off by default: the node list fills as nodes
 announce, so all of it was heard since rBrowser started. On (Settings > Node
@@ -870,8 +918,7 @@ notification tells how the sync ended, or why it cannot run. The gear in the
 Messages bar opens the Messenger settings. The 📮 button next to Send
 sends straight to the node, without trying direct delivery (handy for tests).
 LXMF computes the stamp the node asks for: at the usual cost 16 it can take a
-minute or two on a PC. Saved identities only:
-the ephemeral identity never leaves messages on a node nor collects from one.
+minute or two on a PC.
 If the node does not answer (a sync fails, a message is not taken), it is set
 aside for 30 minutes and the next one is used, the chosen one too: the sync
 starts again on it (up to 3 nodes), the message is sent once more through it.
@@ -956,6 +1003,14 @@ room. Commands: /join room [key], /part, /me, /nick (per hub), /ping,
 typed (/list, /who room, /topic room text, /mode room +o nick...).
 Shift+Enter starts a new line in the message (the field grows up to six lines);
 on a touch screen Enter is the new line and the green arrow sends.
+Delivery: the hub sends every message back to the room, you included. Your
+message shows a clock until it comes back, then a tick. Not back in 10 s
+(plus 3 x the hub's RTT, at most 20 s more; the RTT is live in the top bar,
+measured from pings and your own messages coming back: a slow hub gets more time):
+a ping to the hub, and with no echo 5 s (plus the same) after it the line turns red, "Not
+delivered", with a Retry button (the tooltip says why: hub there but it never
+got it, no answer from the hub, refused by the hub, link closed). Typed while
+the hub is disconnected: red at once, Retry once it is back.
 Typing / (or the / button, or Tab on an empty line) lists the commands, rrcd's with who may use
 them; typing @ lists the people of the room, narrowed as you type (Tab or
 Enter picks). The hub's answers go to the room they name; those naming none
@@ -983,10 +1038,12 @@ unban) or the hub's (rooms, join, ping, nick, copy addresses, the colours'
 legend, connect; for server operators stats, K-lines, reload). The head
 shows your identity hash beside your nick. ☺ opens the emoji, ten a page: the first page is
 the ones you use most, then faces, hands, hearts and the other groups. 🎨 gives your
-messages a colour, a background, bold, italic, underline or an effect (rainbow, fire,
-ocean... 16 of them; by letter, word or gradient), in three tabs: Colours, Presets (text and
-background in one tap) and Effects: left click a colour for the text, right click
-(long press on a phone) for the background; it stays on until Reset. Select a word in the
+messages a colour (the 16 of IRC plus 6 from mIRC's extended set), a background, bold, italic, underline or an effect (rainbow, fire,
+ocean... 16 of them; by letter, word or gradient), in five tabs: Colours, Presets (text and
+background in one tap), Effects, Fonts and ASCII: left click a colour for the text, right click
+(long press on a phone) for the background; it stays on until Reset. Fonts and ASCII change the
+text itself, so every client sees them: 20 fonts (Script, Fraktur, Upside down, g33k,
+Currency...) and 20 frames around the whole message; links, @nicks, #rooms and commands stay as typed. Select a word in the
 box and a small bar (B I U 🎨 ⌀) colours only that part; the box shows the message as it will look. Only rBrowser shows
 them, the other clients get the plain text ("Show colours from others" in Settings >
 RRC Client turns them off). "Chat text size" there makes the chat larger (11-24 px,
@@ -1003,6 +1060,29 @@ its list colour). In the people list a ▸ marks you.
 you are in on this hub (e.g. "bots restarting"). A notice is a kind of
 message in RRC, not a hub command: other clients show it with no sender
 (rBrowser shows "Notice: text (by nick)").
+
+**Stickers** (Settings > RRC Client > Stickers, off by default). Turn them on
+and download the packs you want, from their official sources: OpenMoji
+(CC BY-SA 4.0, 5 MB), Twemoji (CC BY 4.0, 10 MB), Fluent Emoji 3D by
+Microsoft (MIT, 146 MB download, 54 MB kept). Nothing comes with rBrowser.
+Type a single emoji: its stickers show above the bar, Enter sends the plain
+emoji. The sticker button next to the emoji opens all of them: one tab per
+pack plus Recent (your most sent), hover or long press for a big preview.
+A click puts the sticker in the bar, Enter or Send sends it; change the text
+and it goes as plain text.
+A sticker travels as its emoji plus a few bytes: an rBrowser with the same
+pack shows the picture, any other client (and NomadNet) the emoji.
+
+**Telegram stickers** (same place, own switch). Telegram gives its sets only to
+an account or a bot, so you need a bot of your own: in Telegram open
+@BotFather, send `/newbot`, paste the token in Settings (it stays on your
+rBrowser). Then paste a set link (`tg://addstickers?set=NAME` or
+`t.me/addstickers/NAME`) and Import. Animated sets need lottie-web (168 KB,
+asked when you turn the switch on), without it they show a still picture.
+Who gets one of your Telegram stickers without that set sees the emoji and,
+in rBrowser, "Get sticker pack" to import it with their own bot. The sets are
+the authors' work: download them for yourself only.
+
 Automatic replies (Settings > RRC Client), the same as the Messenger's: rules,
 away, echo, only to messages that name you, in that room. "Say it in the
 rooms" adds `/me is away (text)` in each room while away (again every 1-24 h
@@ -1080,7 +1160,10 @@ all) or online (Esri tiles, with streets and names); the map
 providers' terms forbid downloading their tiles for offline use. With RMAP
 off, rBrowser makes no request outside Reticulum.
 
-**Access password** (Settings > System Setup, off by default). rBrowser listens on
+**Access & Remote** (Settings) holds everything about who gets in: the access
+password, the Remote Tunnel, Dynamic DNS and Guest mode.
+
+**Access password** (Settings > Access & Remote, off by default). rBrowser listens on
 your network so a phone can use it, which means anyone on that network can
 too. With the password on, every page and call needs it (the session lasts
 30 days in that browser). This computer gets in without asking unless "Ask
@@ -1089,11 +1172,13 @@ this computer are recognised by their proxy header and always asked (with
 the password off they are refused). Only a salted PBKDF2 hash is kept
 (settings/auth.json); every change (the switches, Change password) asks for
 the current password in a popup, applies at once and logs every other
-browser out; 5 wrong passwords lock that address out for 5 minutes. While
-the Remote access tunnel is on, the password cannot be switched off.
-Forgot it: stop rBrowser and delete settings/auth.json.
+browser out; 5 wrong passwords lock that address out for 5 minutes. Logged
+in with the password, "log out" is in the status bar. While
+the Remote Tunnel is on, the password cannot be switched off.
+Forgot it: stop rBrowser and run `rBrowser.py --set-password` (or delete settings/auth.json).
+From a terminal, with rBrowser stopped: `--set-password` and `--guest-setup`.
 
-**Remote access** (Settings > System Setup). Switch it on and rBrowser gives you an
+**Remote Tunnel** (Settings > Access & Remote). Switch it on and rBrowser gives you an
 https link that works from anywhere, with no router port to open: a free
 Cloudflare quick tunnel (`cloudflared`, downloaded once into `bin/`, no
 account). The link changes each time the tunnel starts. It needs the access
@@ -1103,13 +1188,63 @@ name (afraid.org/FreeDNS, DuckDNS or dynv6) kept pointed at your public IP. On
 afraid.org pick a domain run by afraid itself (mooo.com, chickenkiller.com,
 strangled.net...): other people's public domains can expire ("Broken").
 
-**Guest mode** (Settings > Guest mode, off). A second password, to let
-people try your rBrowser (for example through the Remote access link).
-Guests can browse and read the Settings but change nothing: the server
-refuses it, not just the page. They use the identity you chose and never
-see its keys. Two switches: guests can chat (RRC, BBS, on) and use the LXMF
-messenger (your messages, off). Needs the access password on; your password
-still gives full access.
+**Guest mode** (Settings > Access & Remote, off). Lets other people use your
+rBrowser (for example through the Remote Tunnel link), with a guest password
+or with none ("Enter as guest" on the login page).
+
+What guests can do:
+- Never see the Settings or change anything: the server refuses it, not just
+  the page. Nor can they read the terminal log, server and remote access
+  settings, vanity keys or the rB2 Monitor.
+- One switch per client: NomadNet, RRC, BBS, LXMF, RMAP, Radio. "Guests see my
+  favorites" and "Guests see my history" (off) show them your lists, read only.
+- Each guest gets an identity of its own at login, used in every client and
+  thrown away when it leaves (with its chats, files and links): never yours,
+  never another guest's. They go by "rB2.Guest1.xxxx" (place number and
+  identity) and can rename themselves in LXMF (the pencil) and RRC (Nick).
+- LXMF: only their own chats, in memory, none of your contacts, nicknames or
+  automatic replies; you do not see them.
+- NomadNet and BBS: links of their own, out of your history.
+- RRC: hubs of their own, none of your rooms, nicks or automatic replies,
+  nothing saved. "Fixed RRC hub for guests" keeps them on the hub you pick.
+- Radio: each guest listens on a call of its own.
+- Screenshots and downloads are saved on their own device.
+
+Places and sessions:
+- "Max guests" (3, up to 30) can be in at once; the next one is told the places
+  are taken.
+- "Guests online" lists who is in (address, browser, since when, clients used,
+  identity name and hashes, LXMF ready or not), with Kick and Close all. The
+  count is in your status bar, in theirs, on the login page and above the list.
+- Ban keeps a guest out for 15 min, 1 h, 24 h or until Unban, by address and
+  browser cookie, so a new IP or a cleared cookie alone does not let them back.
+  Your password still works from a banned address.
+- A guest closing the page leaves the list within ~10 s. Silent for 30 s
+  (phone in the background) it is "away": it keeps identity and place for
+  5 min. A new guest finding no free place takes the place of the one away the
+  longest.
+- Restart or Shut down keeps the guests (`settings/guest_resume.json`, deleted
+  when read back): they come back as away. After a crash they log in again.
+
+Closing access:
+- Apply asks your password only to switch guest mode on or off, change open or
+  password access or set a new guest password. Clients, lists, logs and the hub
+  change without it.
+- Guest mode off acts at once: guests see a red bar, inputs locked, then the
+  login page (a reload when you only change a client). Their hubs, BBS
+  sessions and Radio calls close. Opening access again needs a new login.
+- While rBrowser does not answer (stopped, restarting, offline) guest pages and
+  the login page show a red bar, then a green one when it is back.
+
+Logs:
+- "Log guest access" (on): logins, logouts, kicks, closed pages, away and back,
+  in `logs/guest_access.log`.
+- "Log guest actions": pages, downloads, messages, chat lines, refused
+  requests, in `logs/guest_actions.log` or a file you choose. "Log LXMF message
+  text" (off) adds the text; off, only to whom and from whom. Open log, Open
+  file and Clear log are beside it. Guests are told on the login page.
+- Changes to the password, the tunnel, DNS and guest mode go to
+  `settings/access_changes.log`.
 
 **Content-Security-Policy.** Every page tells the browser to run scripts and
 open connections only from rBrowser itself (images also from the Esri map
@@ -1120,6 +1255,13 @@ its own page: another web site open in the same browser cannot make it act,
 and it must be opened by IP address, `localhost`, a `.local` name or a LAN
 name without dots. With the password off, requests from the internet (a port
 opened on the router) are refused.
+
+**Theme** (Settings > System Setup > Theme): Dark, Light or Auto (follows the
+system). NomadNet pages follow it as in NomadNet's own light theme; the BBS
+screen stays dark. NomadNet pages are drawn as written: normal text, bold
+only where the page asks for it.
+Guests see the owner's theme; the sun/moon button in their status bar
+switches it for them only, in their browser.
 
 **Sounds** (Settings > System Setup > Sounds; what sounded while the window was in
 the background is listed in one notice when you come back): a short tone, made in the page,
@@ -1149,9 +1291,8 @@ counts them per identity, and the pop-up says which identity it came to
 (a click switches to it and opens the chat). Only the identity in use
 announces on the timer, counted from when you chose it or announced by
 hand. A sync collects the messages of every saved identity, one after
-the other. The ephemeral identity listens only while it is the one in
-use; when it goes, its open links are closed, so a sender sees a failure
-instead of a delivery to nobody.
+the other. When an identity is deleted, its open links are closed, so a
+sender sees a failure instead of a delivery to nobody.
 
 **Chat tabs.** Every chat you open gets a tab above the chat, like the page
 tabs: switch between them without losing the text you were typing, the
@@ -1165,23 +1306,18 @@ the session.
 chat tabs: who sends it (once the sender has identified on the link), to
 which of your identities, how far it is; × stops it.
 
-**One-packet messages.** Settings > LXMF Messenger > "Send short messages in one
-packet (opportunistic)", off by default: a short message goes as a single
-packet without opening a link first. Longer messages and files still go by
-link. The tooltip on a message's tick says how it went.
+**How a message goes.** As Sideband: in one packet (opportunistic) when no
+link is open and the recipient's keys are fresh, else over a link; longer
+messages and files always by link. The tooltip on a message's tick says how
+it went. Not delivered: tried again ("Retry a failed message", 1-10 times,
+5 by default, a fresh path each time), then left on the propagation node if
+that is on.
 
 **Your name and avatar.** At the start of the Messages bar: your avatar
 (click: Customize me, the same colours as for contacts) and the name you
 announce, with a pencil to change it. Every identity has its own name; a
-saved identity announces the new one at once. Ephemeral identities are
-`eph_` and the first 4 characters of their address, renamable too (sent only
-with Announce). Settings > LXMF Messenger edits the name of the identity chosen there.
-With an ephemeral identity in use, its button shows the time left before it
-changes (a countdown when it is on a timer), in the menu too, with "Keep this
-ephemeral as a saved identity" (same address, its chats kept on disk).
-An ephemeral address is handed to rnsd only when it first writes: before
-that, other programs on this computer do not see a new address every few
-minutes (rnsd never sends it on to the network either way).
+identity in use announces the new one at once. Settings > LXMF Messenger
+edits the name of the identity chosen there.
 
 **Sideband avatars.** A contact's Sideband icon (FIELD_ICON_APPEARANCE) is
 drawn with its colours, using the Material Design Icons font kept in
@@ -1366,15 +1502,6 @@ changed by hand stop it (it names them and changes nothing). If the update
 needs new Python packages, it asks you to run `pip install -r requirements.txt`
 before restarting. A zip or Docker install is updated by hand.
 
-**Advanced options.** Tap the version in Settings > About seven times, as with
-Android's developer options. Advanced holds options for people who know what
-they do; today one: messages from the ephemeral identity. Replies that arrive
-after it changes are lost, so rBrowser asks before each send. Ephemeral
-conversations stay in memory only and are never announced on their own, and
-sending is limited to one message every 10 s and 20 an hour. One recipient
-per message, always: rBrowser has no way to send to lists. Use it for
-privacy, not to annoy people - recipients can ignore you or ask for a stamp.
-
 **Enter sends.** In a page's text field Enter presses the link that sends that
 field (SEND, Submit, Search...), so chats and searches no longer need the
 mouse. In a multi-line field it is Ctrl+Enter.
@@ -1412,7 +1539,7 @@ The home button at its top left goes back to rBrowser, opening it again if
 it was closed.
 
 **A quiet terminal.** Settings chooses which kinds of line the terminal
-shows: errors, connection, identity changes, new ephemeral identities,
+shows: errors, connection, identity changes,
 announces, messenger (LXMF), propagation nodes, requests. By default errors,
 connection, identity and messenger: the page already shows the rest as
 notifications. Every line starts with the time it was printed.
@@ -1615,12 +1742,18 @@ Bundled in the repository, so rBrowser works without fetching anything from a CD
 | Natural Earth 1:50m borders (`script/leaflet/countries.json`) | the offline RMAP map | public domain |
 | Cascadia Mono (`templates/fonts/`) | the Micron page font: its cell matches NomadNet's proportions | SIL OFL 1.1 |
 | Inter (`templates/fonts/`) | the interface font | SIL OFL 1.1 |
+| DSEG14 Classic (`templates/fonts/`) | rB2 Monitor titles, a digital clock font | SIL OFL 1.1 |
 | Twemoji Country Flags (`templates/fonts/`, from country-flag-emoji-polyfill) | flag emoji where the system has none (Windows) | MIT / CC-BY 4.0 (Twemoji) |
 | Material Design Icons (`templates/fonts/`) | interface icons | Pictogrammers Free License |
-| fingerprint, go, ping, star, info icons | page bar buttons | flaticon.com |
+| Lucide fingerprint icon | page bar button | ISC |
 
-From the internet, only when used: the RMAP data from rmap.world and the online map
-tiles from Esri.
+From the internet, only when used: the RMAP data from rmap.world, the online map
+tiles from Esri, and the RRC sticker packs you choose to download:
+[OpenMoji](https://openmoji.org/) (CC BY-SA 4.0),
+[Twemoji](https://github.com/jdecked/twemoji) (graphics CC BY 4.0),
+[Fluent Emoji](https://github.com/microsoft/fluentui-emoji) by Microsoft (MIT);
+the Telegram sets you import (Bot API, your own token) and
+[lottie-web](https://github.com/airbnb/lottie-web) 5.12.2 for the animated ones (MIT).
 
 The Python packages are in [Python Dependencies](#python-dependencies-included-in-requirementstxt);
 the web interface is served by Waitress (Flask's own server if Waitress is missing).
@@ -1667,6 +1800,12 @@ neoemit for the first refactor & docker addition (in the old rBrowser v1, also p
 SudoIvan for his --host / --port arguments contribution (in the old rBrowser v1, also ported in v2)
 
 Casca for his excellent bug hunting skills!
+
+mmoyles87 (https://github.com/mmoyles87) for discovering NomadNet's Micron colours in RRC chat and the first implementation, art mode included (PR #5)
+
+felixx9 (https://github.com/felixx9) for asking for the light theme and NomadNet pages drawn as written, not all in bold (issue #4)
+
+dr4kk4r for the idea of a separate identity for guests in Guest Mode
 
 anyone who opened issues in the previous version, they were all answered before making the old v1 repo private, hope you got the answer!
 

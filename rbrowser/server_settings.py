@@ -24,7 +24,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 
 DEFAULT_HOST = "0.0.0.0"
@@ -318,10 +318,22 @@ def _save_rns_state() -> None:
             pass
 
 
+BEFORE_EXIT: List[Callable[[], None]] = []     # run at every clean stop (guest_resume.save)
+
+
+def run_before_exit() -> None:
+    while BEFORE_EXIT:
+        try:
+            BEFORE_EXIT.pop(0)()
+        except Exception as exc:
+            print(f"⚠️ Before exit: {exc}")
+
+
 def _say_goodbye() -> None:
     """Before this process goes away: the .local name is withdrawn from the
     network, and the tunnel stopped (os._exit would leave cloudflared
     running on its own)."""
+    run_before_exit()
     try:
         from .mdns import local_name as announcer
         announcer.stop()

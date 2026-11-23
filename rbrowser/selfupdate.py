@@ -96,6 +96,10 @@ def _pull() -> None:
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         killer = threading.Timer(PULL_TIMEOUT, proc.kill)
         killer.start()
+        # stdout read at the same time: a long file list fills the pipe (4 KB on Windows) and git waits
+        out_parts: List[bytes] = []
+        reader = threading.Thread(target=lambda: out_parts.append(proc.stdout.read()), daemon=True)
+        reader.start()
         tail: List[str] = []
         buf = b""
         try:
@@ -116,7 +120,8 @@ def _pull() -> None:
                         tail = (tail + [line])[-6:]
                 else:
                     buf += ch
-            out = proc.stdout.read().decode("utf-8", "replace")
+            reader.join(PULL_TIMEOUT)
+            out = b"".join(out_parts).decode("utf-8", "replace")
             code = proc.wait()
         finally:
             killer.cancel()

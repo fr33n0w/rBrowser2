@@ -20,6 +20,10 @@ from typing import Any, Dict, Optional
 import RNS
 import RNS.vendor.umsgpack as msgpack
 
+from . import linkstamps
+
+linkstamps.install()
+
 
 def _clean_hash(destination_hash: str) -> bytes:
     """Convert NomadNet destination hash strings into raw bytes."""
@@ -30,6 +34,28 @@ def _clean_hash(destination_hash: str) -> bytes:
 # Base budget on top of whatever the network says the path costs. NomadNet
 # uses the same number (Browser.DEFAULT_TIMEOUT).
 BASE_TIMEOUT = 10
+
+# A node can ask for a link stamp (RNS 1.6.1+): on Windows one core makes it,
+# and at cost 17-18 it takes 5-60 s. RNS gives up after 15 s by default.
+LINK_STAMP_BUDGET = 300
+
+
+def link_stamp_budget(destination_hash: bytes) -> float:
+    """Extra seconds for the link stamp this node asks for (0 if none); raises the RNS limit to match."""
+    try:
+        cost = RNS.Identity.recall_link_cost(destination_hash)
+        if cost is None and getattr(RNS.Transport, "ALWAYS_STAMP_LRS", False):
+            cost = RNS.Transport.LR_COST
+        if not cost or not getattr(RNS.Transport, "STAMP_LRS", False):
+            return 0
+        if RNS.Transport.LINK_STAMP_TIMEOUT < LINK_STAMP_BUDGET:
+            RNS.Transport.LINK_STAMP_TIMEOUT = LINK_STAMP_BUDGET
+        if cost >= 15:
+            print(f"🔐 The node asks a link stamp of cost {cost:.1f}: it can take up to "
+                  f"{RNS.Transport.LINK_STAMP_TIMEOUT:.0f} s before the link starts")
+        return RNS.Transport.LINK_STAMP_TIMEOUT
+    except Exception:
+        return 0
 
 
 def _reticulum() -> Optional[RNS.Reticulum]:
@@ -425,9 +451,11 @@ class NomadNetBrowser:
                 "nomadnetwork",
                 "node",
             )
-            self.link = RNS.Link(self.destination)
+            stamp_budget = link_stamp_budget(self.destination_hash)
             self.result = RequestResult()
             self.response_event.clear()
+            self.link = RNS.Link(self.destination)
+            self.link.set_link_closed_callback(self._on_link_closed)
 
             self.page_path = page_path
             self.form_data = form_data or None
@@ -443,7 +471,7 @@ class NomadNetBrowser:
             # single budget meant a slow link establishment ate the whole
             # allowance and the request was reported as timed out before the
             # node had been asked anything.
-            success = self.response_event.wait(timeout=timeout * 2)
+            success = self.response_event.wait(timeout=timeout * 2 + stamp_budget)
 
             # A failed request is an error, never a page: returned as
             # content, "Request failed" was shown and saved in the cache over
@@ -520,6 +548,18 @@ class NomadNetBrowser:
             self.result = RequestResult(received=True, error=f"Response error: {exc}")
             self.response_event.set()
 
+    def _on_link_closed(self, link: RNS.Link) -> None:
+        """A link closed before any answer: stop waiting and say why."""
+        if self.result.received:
+            return
+        if link.teardown_reason == getattr(RNS.Link, "STAMP_FAILURE", None):
+            error = "Link stamp took too long (the node asks a high link cost), try again"
+        else:
+            error = "Link closed before the page arrived"
+        print(f"❌ NomadNet: {error}")
+        self.result = RequestResult(received=True, error=error)
+        self.response_event.set()
+
     def _on_request_failed(self, _receipt: RNS.RequestReceipt) -> None:
         """Handle failed requests."""
         print(f"❌ NomadNet: request to {RNS.prettyhexrep(self.destination_hash)} failed")
@@ -579,10 +619,11 @@ class NomadNetBrowser:
                 "node",
             )
 
+            stamp_budget = link_stamp_budget(self.destination_hash)
             started = time.time()
             self.link = RNS.Link(destination)
 
-            if not _await_link(self.link, timeout=timeout):
+            if not _await_link(self.link, timeout=timeout + stamp_budget):
                 return {"error": "Timeout", "message": "Could not establish link", "status": "error"}
 
             # link.rtt is what RNS measured during establishment. Fall back to
@@ -803,11 +844,13 @@ class NomadNetFileBrowser:
             # users refused them on a fresh anonymous link - again an empty
             # download. NomadNet downloads on the page's link too.
             link = self.main_browser.nomadnet_cached_links.get(self.destination_hash)
+            stamp_budget = 0
             if link and link.status == RNS.Link.ACTIVE:
                 print(f"📁 Requesting file: {path} (re-using page link)")
                 self.link = link
                 self._on_link_established(link)
             else:
+                stamp_budget = link_stamp_budget(self.destination_hash)
                 print("✅ Path found, establishing connection for file transfer...")
                 self.destination = RNS.Destination(
                     identity,
@@ -823,7 +866,7 @@ class NomadNetFileBrowser:
             # Given up only when nothing moves for that long, not after a
             # fixed time: a big file over a slow path can take far longer
             # than any timeout, and was cut off while still arriving.
-            idle = timeout * 2
+            idle = timeout * 2 + stamp_budget
             self.last_activity = time.time()
             success = False
             while not self.cancelled:
@@ -1019,8 +1062,9 @@ class NomadNetMediaBrowser:
                     identity, RNS.Destination.OUT, RNS.Destination.SINGLE,
                     "nomadnetwork", "node",
                 )
+                stamp_budget = link_stamp_budget(self.destination_hash)
                 link = RNS.Link(destination)
-                if not _await_link(link, timeout=timeout):
+                if not _await_link(link, timeout=timeout + stamp_budget):
                     return {"error": "Timeout", "content": b"", "filename": "",
                             "status": "error"}
                 self.main_browser.nomadnet_cached_links[self.destination_hash] = link

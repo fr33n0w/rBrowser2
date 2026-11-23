@@ -11,8 +11,9 @@ import os
 import queue
 import threading
 import time
+from collections import deque
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import RNS
 from . import rnsquiet
@@ -81,8 +82,10 @@ from .hidden_nodes import HiddenNodes
 from .history import History
 from .pagecache import PageCache
 from .visits import Visits
-from .identities import EPHEMERAL, IdentityManager, clean_node_hash
-from .messenger import Messenger
+from .linkwatch import LinkWatch
+from .identities import IdentityManager, clean_node_hash
+from .messenger import Messenger, guest_view
+from .guest_identity import current as guest_current
 from .netwatch import NetWatch
 from .rnswatch import RnsWatch
 from .retibbs import RetiBBS
@@ -125,13 +128,75 @@ class AnnounceCounter:
     aspect_filter = None
     receive_path_responses = False
 
+    # The kinds rB2 Monitor tells apart: (key, app, aspects).
+    KINDS = (("nomadnet", "nomadnetwork", ("node",)), ("lxmf", "lxmf", ("delivery",)),
+             ("propagation", "lxmf", ("propagation",)), ("rrc", "rrc", ("hub",)),
+             ("bbs", "retibbs", ("bbs",)))
+    RECENT = 10
+    WINDOW = 3600.0
+
     def __init__(self) -> None:
         self.count = 0
         self.registered = False
+        self.by_kind: Dict[str, int] = {}
+        self._times: deque = deque()            # (time, kind) of the last hour
+        self.recent: deque = deque(maxlen=self.RECENT)
+        self._lock = threading.Lock()
+
+    def kind_of(self, destination_hash: bytes, identity: Any) -> str:
+        if identity is not None:
+            for key, app, aspects in self.KINDS:
+                try:
+                    if RNS.Destination.hash(identity, app, *aspects) == destination_hash:
+                        return key
+                except Exception:
+                    break
+        return "other"
+
+    @staticmethod
+    def _name(kind: str, app_data: Optional[bytes]) -> str:
+        if not app_data:
+            return ""
+        try:
+            if kind == "nomadnet":
+                return app_data.decode("utf-8", "replace")[:40]
+            if kind == "lxmf":
+                import LXMF
+                return (LXMF.display_name_from_app_data(app_data) or "")[:40]
+        except Exception:
+            pass
+        return ""
 
     def received_announce(self, destination_hash: bytes, announced_identity: Any,
                           app_data: Optional[bytes], *args: Any, **kwargs: Any) -> None:
         self.count += 1
+        try:
+            kind = self.kind_of(destination_hash, announced_identity)
+            now = time.time()
+            with self._lock:
+                self.by_kind[kind] = self.by_kind.get(kind, 0) + 1
+                self._times.append((now, kind))
+                while self._times and now - self._times[0][0] > self.WINDOW:
+                    self._times.popleft()
+                self.recent.append({"at": now, "kind": kind, "hash": destination_hash.hex(),
+                                    "name": self._name(kind, app_data)})
+        except Exception:
+            pass
+
+    def stats(self) -> Dict[str, Any]:
+        """Per kind: since start, last minute, last hour; the last ones heard."""
+        now = time.time()
+        with self._lock:
+            while self._times and now - self._times[0][0] > self.WINDOW:
+                self._times.popleft()
+            minute: Dict[str, int] = {}
+            hour: Dict[str, int] = {}
+            for at, kind in self._times:
+                hour[kind] = hour.get(kind, 0) + 1
+                if now - at <= 60:
+                    minute[kind] = minute.get(kind, 0) + 1
+            return {"total": self.count, "by_kind": dict(self.by_kind), "minute": minute,
+                    "hour": hour, "recent": list(self.recent)[::-1]}
 
 
 class NomadNetWebBrowser:
@@ -139,7 +204,7 @@ class NomadNetWebBrowser:
 
     def __init__(self) -> None:
         self.reticulum: Optional[RNS.Reticulum] = None
-        # Profiles, ephemeral identity and per-node bindings. `self.identity`
+        # Profiles and per-node bindings. `self.identity`
         # below is always whichever one is active right now.
         self.identities: Optional[IdentityManager] = None
         self.nomadnet_nodes: Dict[str, Dict[str, Any]] = {}
@@ -164,7 +229,12 @@ class NomadNetWebBrowser:
         self._cache_lock = threading.Lock()
         self.cache_duration = 1.0
 
-        self.nomadnet_cached_links: Dict[bytes, RNS.Link] = {}
+        # Each guest session has links of its own: never a link the owner or another guest identified on.
+        self._owner_links: Dict[bytes, RNS.Link] = {}
+        self._guest_nomad: Dict[str, LinkWatch] = {}      # gid -> its LinkWatch (and links)
+        self._guest_nomad_lock = threading.Lock()
+        # Closes the links of nodes no tab shows any more (linkwatch.py).
+        self._owner_watch = LinkWatch(self._owner_links, name_of=self.node_name_for)
 
         # destination hash -> (timestamp, hop info). See get_node_hops().
         self._hops_cache: Dict[str, Any] = {}
@@ -202,17 +272,21 @@ class NomadNetWebBrowser:
         # while the connection is still coming up.
         self.identities = IdentityManager()
 
-        # Timed ephemeral identities are changed here, by the server, so the
-        # change happens on time whether or not a page is open.
-        threading.Thread(target=self._ephemeral_timer, name="ephemeral-timer",
-                         daemon=True).start()
+        self._owner_watch.start()
+        threading.Thread(target=self._guest_watch_loop, name="guest-link-watch", daemon=True).start()
 
         # Work that has to run on the main thread (an LXMRouter installs
         # signal handlers), queued from the web server's threads and run by
         # the main loop in rBrowser.py.
         self.main_thread_tasks: "queue.Queue" = queue.Queue()
+        # One throwaway identity per guest session (rbrowser/guest_identity.py).
+        from .guest_identity import GuestIdentity
+        self.guest_identity = GuestIdentity()
         # The LXMF messenger: rbrowser/messenger.py. Off until enabled.
         self.messenger = Messenger(self)
+        self.guest_identity.on_rename = self._guest_renamed
+        self.guest_identity.on_ready = lambda entry: self.messenger.guest_ready(entry.gid)
+        self.guest_identity.on_release = self._guest_released
         # The RetiBBS client: rbrowser/retibbs.py. Off until enabled.
         self.retibbs = RetiBBS(self)
         # RMAP integration: rbrowser/rmap.py. Plain HTTPS to rmap.world,
@@ -222,6 +296,9 @@ class NomadNetWebBrowser:
         # The RRC chat client: rbrowser/rrc.py. Off until enabled.
         from .rrc import RRC
         self.rrc = RRC(self)
+        # The radio-lxst client: rbrowser/radio.py. Listens only once the Radio tab asks.
+        from .radio import RadioService
+        self.radio = RadioService(self)
 
         print()
         from . import updates
@@ -624,24 +701,143 @@ class NomadNetWebBrowser:
 
     @property
     def identity(self) -> Optional[RNS.Identity]:
-        """The identity in use right now: a profile, or the ephemeral one."""
+        """The identity in use right now: a guest's request gets the guest one."""
+        if guest_view():
+            return self.guest_identity.get()
         return self.identities.active_identity() if self.identities else None
 
+    def _guest_renamed(self, entry: Any, client: str) -> None:
+        if client in ("", "messenger"):
+            self.messenger.guest_renamed(entry.gid)
+
+    def _guest_released(self, entry: Any) -> None:
+        """A guest session is over: everything it had open goes with its identity."""
+        self.close_guest_links(entry.gid)
+        for client in (getattr(self, "rrc", None), getattr(self, "retibbs", None), getattr(self, "radio", None)):
+            if client is not None:
+                client.close_guests(gid=entry.gid)
+        self.messenger.guest_gone(entry.gid, entry.identity)
+
+    def _guest_watch_of(self, gid: str) -> LinkWatch:
+        with self._guest_nomad_lock:
+            watch = self._guest_nomad.get(gid)
+            if watch is None:
+                watch = self._guest_nomad[gid] = LinkWatch({}, name_of=self.node_name_for)
+            return watch
+
+    def _guest_watch_loop(self) -> None:
+        from .linkwatch import SWEEP_EVERY
+        while True:
+            time.sleep(SWEEP_EVERY)
+            for watch in list(self._guest_nomad.values()):
+                try:
+                    watch.sweep()
+                except Exception as exc:
+                    print(f"⚠️ Guest link check failed: {exc}")
+
+    def close_guest_links(self, gid: Optional[str] = None) -> int:
+        """The NomadNet links of one guest session (gid) or of all, torn down."""
+        with self._guest_nomad_lock:
+            gone = [self._guest_nomad.pop(g) for g in list(self._guest_nomad) if gid is None or g == gid]
+        n = 0
+        for watch in gone:
+            for link in list(watch.links.values()):
+                try:
+                    link.teardown()
+                    n += 1
+                except Exception:
+                    pass
+            watch.links.clear()
+        return n
+
+    @property
+    def nomadnet_cached_links(self) -> Dict[bytes, RNS.Link]:
+        if guest_view():
+            gid = guest_current()
+            return self._guest_watch_of(gid).links if gid else {}
+        return self._owner_links
+
+    @nomadnet_cached_links.setter
+    def nomadnet_cached_links(self, links: Dict[bytes, RNS.Link]) -> None:
+        if guest_view():
+            gid = guest_current()
+            if gid:
+                self._guest_watch_of(gid).links = links
+        else:
+            self._owner_links = links
+            if getattr(self, "_owner_watch", None) is not None:
+                self._owner_watch.links = links
+
+    @property
+    def link_watch(self) -> LinkWatch:
+        if guest_view():
+            gid = guest_current()
+            return self._guest_watch_of(gid) if gid else LinkWatch({})
+        return self._owner_watch
+
     def identities_snapshot(self) -> Dict[str, Any]:
+        if guest_view():
+            return self._guest_identities_snapshot()
         names = {str(e.get("hash", "")).lower(): e.get("name", "")
                  for e in list(self.nomadnet_nodes.values())}
         snap = self.identities.snapshot(names)
         snap["identified_nodes"] = self.identified_nodes()
+        snap["used_in"] = self.identity_uses(snap.get("active"))
         return snap
+
+    def _guest_identities_snapshot(self) -> Dict[str, Any]:
+        """What a guest sees of identities: its own one, nothing of the owner's."""
+        from .identities import describe_identity
+        from .messenger import GUEST_ID
+        name = self.guest_identity.nickname("nomadnet")
+        mine = describe_identity(self.guest_identity.get())
+        return {"status": "success", "active": GUEST_ID, "active_name": name, "active_identity": mine,
+                "profiles": [{"id": GUEST_ID, "name": name, "is_default": True, "loadable": True, **mine}],
+                "auto_identify": False, "bindings": [], "identified_nodes": self.identified_nodes(),
+                "used_in": {}, "guest": True}
+
+    def identity_uses(self, browsing: Any) -> Dict[str, List[str]]:
+        """Where each saved identity is active now: {profile id: ["NomadNet", ...]}."""
+        uses: Dict[str, List[str]] = {}
+
+        def add(pid: Any, where: str) -> None:
+            if isinstance(pid, str) and pid and where not in uses.setdefault(pid, []):
+                uses[pid].append(where)
+
+        add(browsing, "NomadNet")
+        try:
+            m = self.messenger.settings
+            if m.get("enabled"):
+                add(m.get("identity"), "LXMF")
+        except Exception:
+            pass
+        try:
+            r = self.rrc
+            if r.settings.get("enabled"):
+                add(r.settings.get("identity"), "RRC")
+                for hub in list(r.sessions.values()):
+                    if hub.state in ("connecting", "connected"):
+                        add(hub.identity_id, "RRC")
+        except Exception:
+            pass
+        try:
+            b = self.retibbs.settings
+            if b.get("enabled"):
+                add(b.get("identity"), "BBS")
+        except Exception:
+            pass
+        try:
+            add(self.radio.in_use_by_owner(), "Radio")
+        except Exception:
+            pass
+        return uses
 
     def _drop_links(self, only_identified_as_other: bool) -> int:
         """
         Tear down cached links. A link that has been identified on stays
         identified for as long as it lives, so after a change of identity it
         would keep presenting the old one: those have to go. With
-        only_identified_as_other False, every link goes - used when the
-        ephemeral identity is replaced, so nothing ties the next page load
-        to the previous ones.
+        only_identified_as_other False, every link goes.
         """
         current = self.identity.hash.hex() if self.identity else None
         dropped = 0
@@ -667,33 +863,6 @@ class NomadNetWebBrowser:
         print(f"🔑 Now using identity {self.identities.name_of(profile_id)}: "
               f"{RNS.prettyhexrep(self.identity.hash)}")
 
-    def rotate_ephemeral(self) -> list:
-        dropped_nodes = self.identities.rotate_ephemeral()
-        if self.identities.active_id == EPHEMERAL:
-            self._drop_links(only_identified_as_other=False)
-            print(f"🎭 New ephemeral identity: {RNS.prettyhexrep(self.identity.hash)}")
-        return dropped_nodes
-
-    def _ephemeral_timer(self) -> None:
-        while True:
-            time.sleep(1)
-            try:
-                due = self.identities.next_rotation()
-                if due is not None and time.time() >= due:
-                    self.rotate_ephemeral()
-            except Exception as exc:
-                print(f"⚠️ Timed ephemeral identity change failed: {exc}")
-                time.sleep(10)
-
-    def keep_ephemeral(self, name: Any) -> Dict[str, Any]:
-        was_active = self.identities.active_id == EPHEMERAL
-        profile = self.identities.keep_ephemeral(name)
-        # Same key under a new name: links identified with it still present
-        # the identity that is now active, so they stay open.
-        if was_active:
-            print(f"💾 Ephemeral identity kept as \"{profile['name']}\"")
-        return profile
-
     def is_identified_to(self, node_hash: str) -> bool:
         """Is the open link to this node one we have identified on?"""
         try:
@@ -706,7 +875,7 @@ class NomadNetWebBrowser:
     def auto_identifies_to(self, node_hash: str) -> bool:
         """Will auto-identify identify to this node when one of its pages opens?"""
         ids = self.identities
-        return bool(ids and ids.state.get("auto_identify") and ids.binding_for(node_hash))
+        return bool(not guest_view() and ids and ids.state.get("auto_identify") and ids.binding_for(node_hash))
 
     def identified_nodes(self) -> list:
         """Nodes with a live link we are identified on, as hex hashes."""
@@ -800,11 +969,14 @@ class NomadNetWebBrowser:
         try:
             print(f"Fetching {page_path} from {node_hash[:16]}...")
             destination_hash = _clean_hash(node_hash)
+            self.link_watch.touch(destination_hash)
 
             cached_link = self.nomadnet_cached_links.get(destination_hash)
             if cached_link and cached_link.status == RNS.Link.ACTIVE:
                 print("Using existing cached link for page request")
-                return self._request_via_cached_link(cached_link, page_path, form_data)
+                response = self._request_via_cached_link(cached_link, page_path, form_data)
+                self.link_watch.touch(destination_hash)
+                return response
 
             print("Creating new browser instance (no cached link available)")
             browser = NomadNetBrowser(self, node_hash)
@@ -813,6 +985,7 @@ class NomadNetWebBrowser:
             if response["status"] == "success" and getattr(browser, "link", None):
                 self.nomadnet_cached_links[destination_hash] = browser.link
                 print("Stored new link in cache")
+            self.link_watch.touch(destination_hash)
 
             return response
 
@@ -1032,7 +1205,11 @@ class NomadNetWebBrowser:
             print(f"NomadNetWebBrowser.send_fingerprint called for {node_hash[:16]}...")
             browser = NomadNetBrowser(self, node_hash)
             result = browser.send_fingerprint()
-            if result.get("status") == "success":
+            if result.get("status") == "success" and guest_view():
+                from .messenger import GUEST_ID
+                result["profile_id"] = GUEST_ID
+                result["profile_name"] = self.guest_identity.nickname("nomadnet")
+            elif result.get("status") == "success":
                 # The first identity used on a node is the one auto-identify
                 # will use there from now on.
                 self.identities.record_identify(clean_node_hash(node_hash))
