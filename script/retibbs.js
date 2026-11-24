@@ -398,7 +398,7 @@ async function pollRetibbs() {
 function startRetibbsPolling() {
     pollRetibbs();
     clearInterval(RetiBBS.pollTimer);
-    RetiBBS.pollTimer = setInterval(pollRetibbs, 2000);
+    RetiBBS.pollTimer = setInterval(() => { if (clientPollDue(RetiBBS, RetiBBS.open)) pollRetibbs(); }, 2000);
 }
 
 function retibbsPost(url, body) {

@@ -3,6 +3,26 @@
 Everything that changed in each version, in full. The short list is in
 [CHANGELOG.md](CHANGELOG.md).
 
+## 2.0.8b
+
+### New
+
+- **Full screen on phones** - a button next to Settings in the tab bar puts the whole rBrowser full screen, without the browser's own bars (which only hide while a page scrolls, and rBrowser's does not). Tap it again, or go back, to leave.
+
+### Changed
+
+- **Much less traffic and CPU** with rBrowser open in a browser (thanks Ant9000): about half the requests when the page is in front, a quarter when it is in the background.
+  - The node list sends only the nodes that changed since the last poll: a few bytes instead of the whole list (hundreds of KB with many nodes) every 2 seconds. Only the rows that changed are redrawn.
+  - The LXMF, RRC, BBS and RMAP clients ask for news every 10 seconds while their tab is not open, or the page is in the background.
+  - With the page in the background the node list is asked for every 30 seconds, and at once when you come back to it.
+  - The connection state comes with the status, one request instead of two.
+- **Stickers** - "Get sticker pack" names the pack, and its tooltip says what to do to see it.
+
+### Fixed
+
+- The page saved its settings to the server every 4 seconds, with nothing changed.
+- A `nomadnetwork://` link clicked with rBrowser in a background tab could open a new tab instead of the one already open.
+
 ## 2.0.7b
 
 ### New

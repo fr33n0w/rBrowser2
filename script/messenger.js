@@ -694,7 +694,7 @@ function notifyIncoming(incoming) {
 function startMessengerPolling() {
     pollMessenger();
     clearInterval(Messenger.pollTimer);
-    Messenger.pollTimer = setInterval(pollMessenger, 3000);
+    Messenger.pollTimer = setInterval(() => { if (clientPollDue(Messenger, Messenger.open)) pollMessenger(); }, 3000);
 }
 
 async function refreshMessenger(scrollToEnd) {

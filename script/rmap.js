@@ -434,7 +434,7 @@ async function pollRmap() {
 function startRmapPolling() {
     pollRmap();
     clearInterval(Rmap.pollTimer);
-    Rmap.pollTimer = setInterval(pollRmap, 5000);
+    Rmap.pollTimer = setInterval(() => { if (clientPollDue(Rmap, Rmap.open)) pollRmap(); }, 5000);
 }
 
 async function loadRmapNodes(force) {

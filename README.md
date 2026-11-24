@@ -21,7 +21,7 @@ A modern, web-based UI for exploring NomadNet nodes and pages over the Reticulum
 
 
 
-> **Beta - v2.0.7b.** rBrowser 2 is published as a beta: everything works, but
+> **Beta - v2.0.8b.** rBrowser 2 is published as a beta: everything works, but
 > some parts of the interface may still have bugs. They are fixed as soon as
 > possible. To hear about updates, switch on *Settings > About > Check for
 > updates at start* (a window tells you when a new version is out, with the

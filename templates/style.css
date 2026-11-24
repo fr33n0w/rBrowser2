@@ -2119,6 +2119,9 @@ body.center-pages .page-content:has(> .error) {
     align-items: center;
     justify-content: center;
 }
+.tab-gear[hidden] {
+    display: none;
+}
 
 
 .tab-content-wrapper {
@@ -14262,6 +14265,16 @@ body.app-window .content {
     font-size: 11px;
     padding: 1px 8px;
     cursor: pointer;
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+.rrc-stk-get b {
+    color: var(--c-c9d1d9);
+    font-weight: 600;
 }
 
 .rrc-stk-get:hover {

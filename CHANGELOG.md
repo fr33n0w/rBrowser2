@@ -3,6 +3,14 @@
 What changes in each version. rBrowser reads this file from GitHub when an
 update is out, and shows the new entries in Settings > About.
 
+## 2.0.8b - 2026-11-24
+
+- Far fewer page requests (thanks Ant9000).
+- Node list sends only changes.
+- Full screen button on phones.
+- Sticker button names its pack.
+- Fixed settings saved every 4 s.
+
 ## 2.0.7b - 2026-11-23
 
 - Added Radio tab (radio-lxst).

@@ -487,7 +487,8 @@ def running_instances() -> List[Dict[str, Any]]:
 # one in use - on this computer, the one focused or shown most recently -
 # and the page picks it up on its next poll. A phone with rBrowser open on
 # the LAN never gets it.
-PAGE_ALIVE_S = 6.0
+# 15 s: a tab in the background has its timers slowed (Firefox: ~5 s).
+PAGE_ALIVE_S = 15.0
 
 
 def _local_addresses() -> set:

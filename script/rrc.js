@@ -725,7 +725,7 @@ async function pollRrc() {
 function startRrcPolling() {
     pollRrc();
     clearInterval(Rrc.pollTimer);
-    Rrc.pollTimer = setInterval(pollRrc, 1500);
+    Rrc.pollTimer = setInterval(() => { if (clientPollDue(Rrc, Rrc.open)) pollRrc(); }, 1500);
 }
 
 function rrcDropPanes(address, which) {
@@ -3620,10 +3620,19 @@ function rrcStkPaint(root) {
             } catch { fail(); }
         } else {
             let tip, act = 'settings';
-            if (tg && rrcStkTgOn() && RrcStk.tg?.token) { tip = `A Telegram sticker from ${name}: click to import the set`; act = 'import'; }
-            else if (tg) tip = `A Telegram sticker from ${name}: switch Telegram stickers on in Settings to see it`;
-            else tip = rrcStkOn() ? `A ${name} sticker: download the pack to see it` : `A ${name} sticker: switch stickers on to see it`;
-            el.innerHTML = `${rrcText(emoji)}${window.rbGuest ? '' : `<button class="rrc-stk-get" data-rrc-stk-get="${rrcEsc(pack)}" data-act="${act}" title="${rrcEsc(tip)}">Get sticker pack</button>`}`;
+            if (tg && rrcStkTgOn() && RrcStk.tg?.token) {
+                tip = `Telegram sticker set: ${name}\nClick to import it with your bot.`;
+                act = 'import';
+            } else if (tg) {
+                tip = `Telegram sticker set: ${name}\nTo see it: Settings > RRC Client > Telegram stickers,`
+                    + ' switch them on and add your bot token, then click here again to import it.';
+            } else if (rrcStkOn()) {
+                tip = `Sticker pack: ${name}\nNot downloaded yet: click to open Settings > RRC Client > Stickers and download it.`;
+            } else {
+                tip = `Sticker pack: ${name}\nStickers are off: click to open Settings > RRC Client > Stickers,`
+                    + ' switch them on and download this pack.';
+            }
+            el.innerHTML = `${rrcText(emoji)}${window.rbGuest ? '' : `<button class="rrc-stk-get" data-rrc-stk-get="${rrcEsc(pack)}" data-act="${act}" title="${rrcEsc(tip)}">Get sticker pack: <b>${rrcEsc(name)}</b></button>`}`;
         }
     });
 }

@@ -225,7 +225,7 @@ window.rbGuest = null;
 // one of these keys is written to the file at once. Kept local: what
 // belongs to this screen (sidebar width, page zoom, open windows).
 (function syncPrefsWithServer() {
-    const LOCAL_ONLY = /^rbrowser_(app_alive_|page_zoom_factor$|sidebar_width$|sidebar_collapsed$|list_collapsed_|settings_category$|guest_theme$)/;
+    const LOCAL_ONLY = /^rbrowser_(app_alive_|main_alive$|link_cmd$|page_zoom_factor$|sidebar_width$|sidebar_collapsed$|list_collapsed_|settings_category$|guest_theme$)/;
     const synced = key => typeof key === 'string' && key.startsWith('rbrowser_') && !LOCAL_ONLY.test(key);
     let store;
     try { store = window.localStorage; } catch (e) { return; }
@@ -266,8 +266,10 @@ window.rbGuest = null;
         }, 150);
     }
     Storage.prototype.setItem = function (key, value) {
+        // The same value written again (a sort saved at every poll) is not news.
+        const same = this === store && this.getItem(key) === String(value);
         setItem.call(this, key, value);
-        if (this === store && synced(key)) queue({ [key]: String(value) });
+        if (this === store && synced(key) && !same) queue({ [key]: String(value) });
     };
     Storage.prototype.removeItem = function (key) {
         removeItem.call(this, key);
@@ -1441,10 +1443,7 @@ async function navigateToUrlInternalTab(url, addHistory = true, forceFresh = fal
     tab.setLoading(true);
 
     try {
-        const response = await fetch('/api/nodes');
-        const nodes = await response.json();
-        cachedNodes = nodes;
-
+        await updateNodes();
     } catch (error) {
         console.warn('Failed to refresh cached nodes:', error);
     }
@@ -3363,10 +3362,44 @@ function appTabOffDialog(name, opts) {
 function placeAppTab(tab) {
     const after = APP_TAB_ORDER.slice(APP_TAB_ORDER.indexOf(tab.id) + 1)
         .map(id => document.getElementById(id)).find(Boolean);
-    const before = after || document.getElementById('tab-bar-settings');
+    const before = after || document.getElementById('tab-bar-fullscreen') || document.getElementById('tab-bar-settings');
     before.parentNode.insertBefore(tab, before);
     layoutAppTabs();
 }
+
+// Phones: the whole rBrowser full screen, without the browser's bars (they
+// only hide on scrolling, and rBrowser's page does not scroll). The page
+// view's Full hides rBrowser's own bars too, this one does not.
+const FULLSCREEN_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>';
+const FULLSCREEN_EXIT_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/></svg>';
+let appFullscreen = false;
+
+function toggleAppFullscreen() {
+    if (document.fullscreenElement) {
+        appFullscreen = false;
+        document.exitFullscreen().catch(() => {});
+        return;
+    }
+    appFullscreen = true;
+    document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => { appFullscreen = false; });
+}
+
+function syncAppFullscreenTab() {
+    const tab = document.getElementById('tab-bar-fullscreen');
+    if (!tab) return;
+    const on = !!document.fullscreenElement;
+    if (!on) appFullscreen = false;
+    tab.innerHTML = on ? FULLSCREEN_EXIT_ICON : FULLSCREEN_ICON;
+    tab.title = on ? 'Leave full screen' : "Full screen: hides the browser's bars";
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const tab = document.getElementById('tab-bar-fullscreen');
+    if (!tab) return;
+    tab.hidden = !(document.documentElement.requestFullscreen && matchMedia('(pointer: coarse)').matches);
+    syncAppFullscreenTab();
+});
+document.addEventListener('fullscreenchange', () => { syncAppFullscreenTab(); layoutAppTabs(); });
 
 // On the desktop each tab is icon + name, so as wide as its text; on a
 // phone only the icon, 30px (style.css), to leave room for the pages.
@@ -3375,6 +3408,11 @@ function layoutAppTabs() {
     const gear = document.getElementById('tab-bar-settings');
     if (gear && !gear.innerHTML && typeof GEAR_ICON !== 'undefined') gear.innerHTML = GEAR_ICON;
     let right = gear ? gear.offsetWidth : 0;
+    const full = document.getElementById('tab-bar-fullscreen');
+    if (full && !full.hidden) {
+        full.style.right = `${right}px`;
+        right += full.offsetWidth;
+    }
     for (const id of [...APP_TAB_ORDER].reverse()) {
         const tab = document.getElementById(id);
         if (!tab || tab.hidden) continue;
@@ -4965,15 +5003,65 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
             return null;
         }
 
+        // The clients' polls: their own pace while open and in sight, else
+        // every 10 s (enough for badges and notifications).
+        function clientPollDue(state, open) {
+            if (open && !document.hidden) return true;
+            if (Date.now() - (state.polledAt || 0) < 10000) return false;
+            state.polledAt = Date.now();
+            return true;
+        }
+
+        // The node list as the server last sent it: each poll brings only
+        // what changed since nodesToken (/api/nodes?since=).
+        let nodeStore = new Map();
+        let nodesToken = '';
+        let nodeRowsCheckedAt = 0;
+        let nodeResortPending = false;
+        let nodesPolledAt = 0;
+
+        function serverTimeMs(iso) {
+            return Date.parse(String(iso || '').slice(0, 23));
+        }
+
+        function seenRelative(seconds) {
+            if (!(seconds >= 60)) return 'Just now';
+            if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+            return `${Math.floor(seconds / 3600)}h ago`;
+        }
+
+        // Merges an answer into nodeStore; the hashes to redraw, or null for all.
+        function mergeNodeDelta(data) {
+            if (!data || !Array.isArray(data.nodes)) throw new Error('Bad nodes answer');
+            nodesToken = data.token || '';
+            if (data.full) nodeStore = new Map();
+            const touched = new Set();
+            for (const node of data.nodes) { nodeStore.set(node.hash, node); touched.add(node.hash); }
+            for (const hash of data.gone || []) nodeStore.delete(hash);
+            const now = serverTimeMs(data.now);
+            for (const node of nodeStore.values()) {
+                const rel = seenRelative((now - serverTimeMs(node.last_seen)) / 1000);
+                if (node.last_seen_relative !== rel) { node.last_seen_relative = rel; touched.add(node.hash); }
+            }
+            if (data.full || Date.now() - nodeRowsCheckedAt > 10000) {
+                nodeRowsCheckedAt = Date.now();
+                return null;
+            }
+            return touched;
+        }
+
         function updateNodes() {
             if (nodeListPaused) return Promise.resolve();
-            return fetch('/api/nodes')
+            return fetch('/api/nodes?since=' + encodeURIComponent(nodesToken))
                 .then(r => {
                     if (!r.ok) throw new Error(`HTTP ${r.status}`);
                     return r.json();
                 })
-                .then(nodes => {
+                .then(data => {
+                    const touched = mergeNodeDelta(data);
+                    const nodes = Array.from(nodeStore.values());
                     cachedNodes = nodes;
+                    const quiet = touched && !touched.size && !(data.gone || []).length;
 
                     const list = document.getElementById('node-list');
                     if (!list) return;
@@ -5025,7 +5113,7 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
                         seen.add(node.hash);
                         const item = existing.get(node.hash);
                         if (item) {
-                            refreshNodeItem(item, node);
+                            if (!touched || touched.has(node.hash)) refreshNodeItem(item, node);
                             nodeListAcked.delete(node.hash);
                             // Announced again: under a sort that moves it
                             // up for that, it counts with the new nodes.
@@ -5098,7 +5186,11 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
                         nodeSortApplied = true;
                         sortAndFilterNodes();
                     } else if (!nodeListInUse()) {
-                        sortAndFilterNodes();
+                        // Nothing changed: the order cannot have either.
+                        if (!quiet || added || nodeResortPending) sortAndFilterNodes();
+                        nodeResortPending = false;
+                    } else {
+                        nodeResortPending = true;
                     }
                     // After a click on "N new nodes": go to them, wherever
                     // they are, the ones that waited and the ones already in.
@@ -5128,30 +5220,24 @@ function fetchPageByUrlTab(hash, path, originalUrl, forceFresh = false, targetTa
                     if (!r.ok) throw new Error(`HTTP ${r.status}`);
                     return r.json();
                 })
-                .then(data => {
-                    document.getElementById('announce-count').textContent = data.total_announces;
-                    const guests = document.getElementById('sb-guests');
-                    if (guests) {
-                        guests.hidden = data.guests == null;
-                        guests.classList.toggle('sb-guests-in', data.guests > 0);
-                        document.getElementById('guests-count').textContent = data.guests ?? 0;
+                .then(full => {
+                    try {
+                        document.getElementById('announce-count').textContent = full.total_announces;
+                        const guests = document.getElementById('sb-guests');
+                        if (guests) {
+                            guests.hidden = full.guests == null;
+                            guests.classList.toggle('sb-guests-in', full.guests > 0);
+                            document.getElementById('guests-count').textContent = full.guests ?? 0;
+                        }
+                        renderHeardStats(full.heard);
+                        checkFavoritesRevision(full.favorites_revision);
+                        openDeliveredLinks(full.open_links);
+                    } catch (error) {
+                        console.warn('Basic status API error:', error);
                     }
-                    renderHeardStats(data.heard);
-                    checkFavoritesRevision(data.favorites_revision);
-                    openDeliveredLinks(data.open_links);
-                })
-                .catch(error => {
-                    console.warn('Basic status API error:', error);
-                });
-            
-            fetch('/api/connection-status')
-                .then(r => {
-                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                    return r.json();
-                })
-                .then(data => {
+                    // The connection's state comes in the same answer.
+                    const data = full.connection || {};
 
-                    const wasInErrorState = statusFetchFailures >= maxStatusFailures;
                     statusFetchFailures = 0;
                     lastStatusFetch = Date.now();
 
@@ -8613,7 +8699,8 @@ function togglePageFullscreen(on) {
         if (!native && root.requestFullscreen) {
             root.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
         }
-    } else if (native && document.exitFullscreen) {
+    } else if (native && document.exitFullscreen && !appFullscreen) {
+        // Not when the whole app was full screen (toggleAppFullscreen) before.
         document.exitFullscreen().catch(() => {});
     }
     // The page has a new width: fit it again.
@@ -9082,7 +9169,12 @@ document.addEventListener('DOMContentLoaded', async function() {
     window.addEventListener('orientationchange', onViewportChange);
 
     setInterval(() => {
-        updateNodes();
+        // Out of sight the list waits (30 s); status keeps its pace, the
+        // server finds the page for a clicked link by it (links.PAGE_ALIVE_S).
+        if (!document.hidden || Date.now() - nodesPolledAt > 30000) {
+            nodesPolledAt = Date.now();
+            updateNodes();
+        }
         updateStatus();
 
         if (statusFetchFailures >= maxStatusFailures) {
@@ -9094,6 +9186,9 @@ document.addEventListener('DOMContentLoaded', async function() {
             }
         }
     }, 2000);
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) { nodesPolledAt = Date.now(); updateNodes(); }
+    });
 
     updateNodes();
     updateStatus();
@@ -14857,6 +14952,7 @@ async function hideNode(hash, name) {
     // over it, and would otherwise keep the row until the pointer left.
     document.querySelectorAll(`.node-item[data-hash="${CSS.escape(hash)}"]`).forEach(el => el.remove());
     cachedNodes = cachedNodes.filter(n => n.hash !== hash);
+    nodeStore.delete(hash);
     const label = escapeHtml(name || hash.slice(0, 8) + '…');
     showNotification(`Hidden: ${label}<br><span style="opacity:.8">Settings &gt; Hidden nodes to restore.</span>`
         + `<br><button class="notif-action" onclick="unhideNode('${jsAttr(hash)}'); this.closest('.notification').remove();">Undo</button>`,

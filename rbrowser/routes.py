@@ -21,6 +21,7 @@ import RNS
 from . import rnsquiet, vanity
 from flask import jsonify, render_template, request, send_file, send_from_directory, Response, abort
 import time
+from datetime import datetime
 import uuid
 from urllib.parse import quote, urlsplit
 from html import escape as html_escape
@@ -638,8 +639,49 @@ def register_routes(app, browser) -> None:
     # One shared snapshot of the node list. The UI polls every two seconds and
     # several tabs poll independently; without this, each poll rebuilt the
     # whole list and re-walked the path table for every node.
-    _nodes_snapshot = {"at": 0.0, "rev": -1, "payload": None}
+    # Each rebuild compares every node with the previous one: "changed" and
+    # "gone" say at which seq a node last changed or left, for ?since=.
+    _nodes_snapshot = {"at": 0.0, "rev": -1, "payload": None, "seq": 0, "floor": 0,
+                       "sigs": {}, "changed": {}, "gone": {}}
     _NODES_SNAPSHOT_TTL = 1.5
+    _NODES_GONE_MAX = 5000
+    _nodes_lock = threading.Lock()
+
+    def _nodes_rebuild(snap, rev, now):
+        nodes = [n for n in browser.get_nodes()
+                 if not browser.hidden_nodes.is_hidden(n["hash"])]
+        for node in nodes:
+            path_info = browser.get_node_path_info(node["hash"])
+            node["hops"] = path_info["hops"]
+            node["next_hop_interface"] = path_info["next_hop_interface"]
+            node["interface"] = path_info.get("interface", "")
+            node["visits"] = browser.visits.count(node["hash"])
+        seq = snap["seq"] + 1
+        sigs = {}
+        diff = False
+        for node in nodes:
+            # The page works out "5m ago" itself: not a change.
+            sig = json.dumps({k: v for k, v in node.items() if k != "last_seen_relative"},
+                             sort_keys=True, default=str)
+            sigs[node["hash"]] = sig
+            if snap["sigs"].get(node["hash"]) != sig:
+                snap["changed"][node["hash"]] = seq
+                snap["gone"].pop(node["hash"], None)
+                diff = True
+        for old in snap["sigs"]:
+            if old not in sigs:
+                snap["gone"][old] = seq
+                snap["changed"].pop(old, None)
+                diff = True
+        if len(snap["gone"]) > _NODES_GONE_MAX:
+            snap["gone"].clear()
+            snap["floor"] = seq
+        if diff:
+            snap["seq"] = seq
+        snap["sigs"] = sigs
+        snap["payload"] = nodes
+        snap["rev"] = rev
+        snap["at"] = now
 
     @app.route("/api/nodes")
     def api_nodes():
@@ -647,24 +689,33 @@ def register_routes(app, browser) -> None:
         rev = getattr(browser, "nodes_revision", 0)
         snap = _nodes_snapshot
 
-        fresh = (snap["payload"] is not None
-                 and snap["rev"] == rev
-                 and now - snap["at"] < _NODES_SNAPSHOT_TTL)
+        with _nodes_lock:
+            fresh = (snap["payload"] is not None
+                     and snap["rev"] == rev
+                     and now - snap["at"] < _NODES_SNAPSHOT_TTL)
+            if not fresh:
+                _nodes_rebuild(snap, rev, now)
 
-        if not fresh:
-            nodes = [n for n in browser.get_nodes()
-                     if not browser.hidden_nodes.is_hidden(n["hash"])]
-            for node in nodes:
-                path_info = browser.get_node_path_info(node["hash"])
-                node["hops"] = path_info["hops"]
-                node["next_hop_interface"] = path_info["next_hop_interface"]
-                node["interface"] = path_info.get("interface", "")
-                node["visits"] = browser.visits.count(node["hash"])
-            snap["payload"] = nodes
-            snap["rev"] = rev
-            snap["at"] = now
+            # ?since=<token>: only what changed after it (the page polls every
+            # few seconds, the whole list was hundreds of KB each time).
+            since = request.args.get("since")
+            if since is not None:
+                instance = str(browser.start_time)
+                full = True
+                inst, _, seq_text = since.rpartition(":")
+                if inst == instance and seq_text.isdigit():
+                    last = int(seq_text)
+                    full = not (snap["floor"] <= last <= snap["seq"])
+                if full:
+                    nodes, gone = snap["payload"], []
+                else:
+                    nodes = [n for n in snap["payload"] if snap["changed"].get(n["hash"], 0) > last]
+                    gone = [h for h, s in snap["gone"].items() if s > last]
+                return jsonify({"token": f"{instance}:{snap['seq']}", "full": full,
+                                "nodes": nodes, "gone": gone,
+                                "now": datetime.now().isoformat()})
 
-        response = jsonify(snap["payload"])
+            response = jsonify(snap["payload"])
         # An ETag lets an unchanged poll come back as a bodiless 304 instead of
         # re-sending the entire list. fetch() handles the revalidation itself,
         # so the page code does not change at all.
@@ -706,6 +757,8 @@ def register_routes(app, browser) -> None:
                 "guests": _guests_for_owner(),
                 # rbrowser/rnswatch.py: Reticulum's interfaces to the network, up / all.
                 "interfaces": {k: v for k, v in browser.rnswatch.status().items() if k != "rns_offline_for"},
+                # The same as /api/connection-status: one request per poll, not two.
+                "connection": api_connection_status().get_json(),
             }
         )
 
