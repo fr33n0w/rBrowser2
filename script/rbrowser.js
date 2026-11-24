@@ -12553,9 +12553,9 @@ async function runSelfUpdate(restart) {
     doRestart(location.origin, location.origin);
 }
 
-// rBrowser's version on the empty pages of the clients (version.txt, via
-// /api/version): "rBrowser v2.0.0" and the client's name under it, as its title.
-let RB_VERSION = '2.0.8b';
+// rBrowser's version (version.txt, written in the page by the server, then
+// /api/version): "rBrowser v2.0.0" on the empty pages of the clients.
+let RB_VERSION = document.documentElement.dataset.rbVersion || '?';
 
 function clientWelcome(icon, name) {
     return `<div class="client-welcome">${rbLogo('rb-logo-welcome')}<h2 class="rb-version">rBrowser v${RB_VERSION}</h2>
