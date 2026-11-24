@@ -15,7 +15,7 @@
     {% set theme = ui_prefs.get('rbrowser_theme') or 'dark' %}
     {% set shown = 'light' if theme == 'light' else 'dark' %}
     <meta name="color-scheme" content="{{ 'only light' if shown == 'light' else 'dark' }}">
-    <title>rBrowser v2.0.7b - Standalone Reticulum Browser</title>
+    <title>rBrowser v{{ rb_version }} - Standalone Reticulum Browser</title>
     <link rel="icon" type="image/png" href="/logo-small.png">
     <!-- The theme's colours (Settings > System Setup > Theme) from the first
          moment, before style.css, and the splash's logos asked for at once. -->
@@ -317,7 +317,7 @@
                 <div class="welcome">
                     <div class="client-welcome">
                         <img class="rb-logo rb-logo-welcome" src="/logo.png" alt="" aria-hidden="true">
-                        <h2 class="rb-version">rBrowser v2.0.7b</h2>
+                        <h2 class="rb-version">rBrowser v{{ rb_version }}</h2>
                         <span class="bbs-title"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor"
                             stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 4h8M5.5 8h8M5.5 12h8"/><circle cx="2.5" cy="4" r=".8"/><circle cx="2.5" cy="8" r=".8"/><circle cx="2.5" cy="12" r=".8"/></svg><span>NomadNet Browser</span></span>
                     </div>

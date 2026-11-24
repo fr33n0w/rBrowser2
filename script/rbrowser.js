@@ -11370,7 +11370,7 @@ function showSettings(category) {
         <div class="auto-reload-setting" data-cat="about">
             <div class="settings-label">About</div>
             <div class="settings-about-logo">${rbLogo('', true)}
-            <div class="settings-about" id="settings-version">rBrowser v2.0.7b</div></div>
+            <div class="settings-about" id="settings-version">rBrowser v${RB_VERSION}</div></div>
             <div class="settings-running-on" data-running-on>Loading...</div>
             <div class="settings-hint">Beta: some parts of the interface may still have bugs; they are fixed as soon as possible.</div>
             <div class="settings-hint" id="settings-usage" title="rBrowser's Python process; page = this browser tab (Chrome/Edge only)"></div>
@@ -12555,7 +12555,7 @@ async function runSelfUpdate(restart) {
 
 // rBrowser's version on the empty pages of the clients (version.txt, via
 // /api/version): "rBrowser v2.0.0" and the client's name under it, as its title.
-let RB_VERSION = '2.0.7b';
+let RB_VERSION = '2.0.8b';
 
 function clientWelcome(icon, name) {
     return `<div class="client-welcome">${rbLogo('rb-logo-welcome')}<h2 class="rb-version">rBrowser v${RB_VERSION}</h2>

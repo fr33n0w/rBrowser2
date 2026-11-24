@@ -518,7 +518,9 @@ def register_routes(app, browser) -> None:
                 return render_template("guest_wait.html")
         with _UI_PREFS_LOCK:
             ui_prefs = _read_ui_prefs()
-        return render_template("index.html", page_auth=page_auth, ui_prefs=ui_prefs)
+        from . import updates
+        return render_template("index.html", page_auth=page_auth, ui_prefs=ui_prefs,
+                               rb_version=updates.local_version())
 
     def guest_waits():
         """This guest's LXMF announce needs the stamp from its browser first (with LXMF open to guests)."""
